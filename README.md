@@ -2,6 +2,8 @@
 
 A simple, self-hosted file and paste server with syntax highlighting, media support, collections, and a dark-mode web UI.
 
+> **Warning:** This project was largely written by an LLM (Claude). While it works, the code has not been thoroughly audited. Use at your own risk and review before deploying in sensitive environments.
+
 ## Features
 
 - **File uploads** with deduplication (MD5)
