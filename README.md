@@ -99,6 +99,10 @@ echo "your-secret-key" | sudo tee -a /var/lib/filebin/apikeys
 sudo systemctl enable --now filebin
 ```
 
+## Android Client
+
+An Android client is available at [filebin-android](https://github.com/carnager/filebin-android) — built with Kotlin and Jetpack Compose (Material 3), with upload, share intent, history, gallery, collections, and password protection.
+
 ## Credits
 
 Inspired by [fb](https://github.com/Bluewind/filebin) by Florian Pritz (Bluewind).
