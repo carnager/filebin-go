@@ -1,0 +1,38 @@
+{{template "header" .}}
+
+{{if .File}}
+<h2>File info</h2>
+<table class="info">
+  <tr><th>ID</th><td><a href="/{{.File.ID}}">{{.File.ID}}</a></td></tr>
+  <tr><th>Name</th><td>{{.File.Name}}</td></tr>
+  <tr><th>Type</th><td>{{.File.Mimetype}}</td></tr>
+  <tr><th>Size</th><td>{{.File.Size | formatBytes}}</td></tr>
+  <tr><th>Date</th><td>{{.File.Date | formatDate}}</td></tr>
+  <tr><th>MD5</th><td><code>{{.File.Hash}}</code></td></tr>
+</table>
+{{end}}
+
+{{if .Collection}}
+<h2>Collection info</h2>
+<table class="info">
+  <tr><th>ID</th><td><a href="/{{.Collection.ID}}">{{.Collection.ID}}</a></td></tr>
+  <tr><th>Files</th><td>{{len .Collection.Files}}</td></tr>
+  <tr><th>Date</th><td>{{.Collection.Date | formatDate}}</td></tr>
+</table>
+<h3>Files</h3>
+<table>
+  <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Size</th></tr></thead>
+  <tbody>
+  {{range .ColFiles}}
+    <tr>
+      <td><a href="/{{.ID}}">{{.ID}}</a></td>
+      <td>{{.Name}}</td>
+      <td>{{.Mimetype}}</td>
+      <td>{{.Size | formatBytes}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{template "footer" .}}

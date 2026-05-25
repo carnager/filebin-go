@@ -1,0 +1,23 @@
+{{define "footer"}}
+</main>
+<script>
+(function(){
+  var btn=document.getElementById('theme-toggle');
+  function isDark(){
+    var t=document.documentElement.getAttribute('data-theme');
+    if(t)return t==='dark';
+    return !window.matchMedia('(prefers-color-scheme:light)').matches;
+  }
+  function update(){btn.textContent=isDark()?'\u2600':'\u263E'}
+  btn.onclick=function(){
+    var next=isDark()?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    localStorage.setItem('theme',next);
+    update();
+  };
+  update();
+})();
+</script>
+</body>
+</html>
+{{end}}

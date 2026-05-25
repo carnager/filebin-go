@@ -1,0 +1,24 @@
+[Unit]
+Description=Filebin paste server
+After=network.target
+
+[Service]
+Type=simple
+User=filebin
+Group=filebin
+ExecStart=/usr/bin/filebin -addr :7995 -data /var/lib/filebin -max-age 90
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/filebin
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

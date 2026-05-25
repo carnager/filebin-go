@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Upload to filebin
+Comment=Upload files to your filebin server
+Exec=fb-upload %F
+Icon=document-send
+NoDisplay=true

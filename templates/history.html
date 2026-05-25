@@ -1,0 +1,106 @@
+{{template "header" .}}
+
+<div class="page-bar">
+  <h2>History</h2>
+  <div class="tabs">
+    <a href="/history" class="active">List</a>
+    <a href="/gallery">Gallery</a>
+  </div>
+</div>
+
+<form method="post" id="hform">
+  <div class="actions">
+    <input type="hidden" name="delete_files" id="delete_files" value="0">
+    <button type="submit" formaction="/delete" class="btn danger sm" onclick="return confirmDelete()">Delete</button>
+    <button type="submit" formaction="/collection" class="btn sm" id="btn-col" style="display:none">Collection</button>
+    <span class="meta ml-auto">{{len .Files}} files · {{len .Collections}} collections · {{.TotalSize | formatBytes}}</span>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th class="w-check"><input type="checkbox" id="ckall"></th>
+      <th>ID</th><th>Name</th><th>Type</th><th>Date</th><th>Size</th>
+    </tr></thead>
+    <tbody>
+    {{range .Collections}}
+      <tr>
+        <td><input type="checkbox" name="ids" value="{{.ID}}"></td>
+        <td><a href="/{{.ID}}">{{.ID}}</a></td>
+        <td>{{len .Files}} file(s)</td>
+        <td>collection</td>
+        <td>{{.Date | formatDate}}</td>
+        <td>—</td>
+      </tr>
+    {{end}}
+    {{range .Files}}
+      <tr>
+        <td><input type="checkbox" name="ids" value="{{.ID}}"></td>
+        <td><a href="/{{.ID}}">{{.ID}}</a></td>
+        <td>{{.Name}}</td>
+        <td>{{.Mimetype}}</td>
+        <td>{{.Date | formatDate}}</td>
+        <td>{{.Size | formatBytes}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</form>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modal-title">Delete selected?</h3>
+    <p id="modal-desc">This cannot be undone.</p>
+    <label class="check" id="modal-check-wrap" style="display:none">
+      <input type="checkbox" id="modal-check">
+      Also delete files inside collections
+    </label>
+    <div class="modal-actions">
+      <button class="btn sm" id="modal-cancel">Cancel</button>
+      <button class="btn sm danger" id="modal-confirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function updateColBtn(){
+  var checked=document.querySelectorAll('input[name=ids]:checked');
+  var files=0;
+  checked.forEach(function(b){var row=b.closest('tr');if(row){var td=row.querySelector('td:nth-child(4)');if(td&&td.textContent!=='collection')files++;}});
+  document.getElementById('btn-col').style.display=files>=2?'':'none';
+}
+document.getElementById('ckall').onchange=function(){document.querySelectorAll('input[name=ids]').forEach(c=>c.checked=this.checked);updateColBtn()};
+document.querySelectorAll('input[name=ids]').forEach(function(c){c.addEventListener('change',updateColBtn)});
+
+(function(){
+  var modal=document.getElementById('modal');
+  var check=document.getElementById('modal-check');
+  var checkWrap=document.getElementById('modal-check-wrap');
+  var form=document.getElementById('hform');
+  var pending=false;
+
+  modal.addEventListener('click',function(e){if(e.target===modal)closeModal()});
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('modal-confirm').addEventListener('click',function(){
+    if(check.checked)document.getElementById('delete_files').value='1';
+    closeModal();
+    pending=true;
+    form.action='/delete';
+    form.submit();
+  });
+
+  function closeModal(){modal.classList.remove('open');check.checked=false;checkWrap.style.display='none';}
+
+  window.confirmDelete=function(){
+    var boxes=document.querySelectorAll('input[name=ids]:checked');
+    if(!boxes.length)return false;
+    var n=boxes.length;
+    var hasColl=false;
+    boxes.forEach(function(b){var row=b.closest('tr');if(row){var td=row.querySelector('td:nth-child(4)');if(td&&td.textContent==='collection')hasColl=true;}});
+    document.getElementById('modal-title').textContent='Delete '+n+' item'+(n>1?'s':'')+'?';
+    checkWrap.style.display=hasColl?'flex':'none';
+    modal.classList.add('open');
+    return false;
+  };
+})();
+</script>
+{{template "footer" .}}

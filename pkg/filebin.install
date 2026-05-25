@@ -1,0 +1,52 @@
+post_install() {
+    cat <<EOF
+
+  ┌─────────────────────────────────────────────┐
+  │           filebin — setup guide              │
+  └─────────────────────────────────────────────┘
+
+  1. Add an API key:
+
+     echo 'your-secret-key' | sudo tee /var/lib/filebin/apikeys
+     sudo chown filebin:filebin /var/lib/filebin/apikeys
+     sudo chmod 600 /var/lib/filebin/apikeys
+
+  2. Start the service:
+
+     sudo systemctl enable --now filebin
+
+  3. Auto-cleanup is enabled by default (90 days).
+     To change it, override the service:
+
+     sudo systemctl edit filebin
+
+     Add under [Service]:
+       ExecStart=
+       ExecStart=/usr/bin/filebin -addr :7995 -data /var/lib/filebin -max-age 30
+
+     Use -max-age 0 to keep files forever.
+
+  The server runs on port 7995 by default.
+  The CLI client 'fb' is installed at /usr/bin/fb.
+
+EOF
+}
+
+post_upgrade() {
+    cat <<EOF
+
+  filebin upgraded — restart the service:
+
+     sudo systemctl restart filebin
+
+EOF
+}
+
+post_remove() {
+    cat <<EOF
+
+  Data directory /var/lib/filebin was NOT removed.
+  Delete it manually if you no longer need it.
+
+EOF
+}

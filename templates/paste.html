@@ -1,0 +1,27 @@
+{{template "header" .}}
+
+<div class="file-bar">
+  <strong>{{.File.Name}}</strong>
+  <span class="meta">{{.File.Size | formatBytes}} · {{.LexerName}} · <a href="{{.RawURL}}">raw</a> · <a href="/{{.File.ID}}/info">info</a></span>
+</div>
+<style>{{.ChromaCSS}}</style>
+<div class="code-wrap" id="codeblock">
+<button class="code-copy" id="codecopy" title="Copy">&#128203;</button>
+{{.Highlight}}
+</div>
+
+<script>
+document.getElementById('codecopy').addEventListener('click',function(){
+  var code=document.getElementById('codeblock');
+  var lines=code.querySelectorAll('.line');
+  var text;
+  if(lines.length){text=Array.from(lines).map(function(l){return l.textContent}).join('\n');}
+  else{var pre=code.querySelector('pre');text=pre?pre.textContent:code.textContent;}
+  navigator.clipboard.writeText(text).then(function(){
+    var btn=document.getElementById('codecopy');
+    btn.textContent='\u2713';setTimeout(function(){btn.innerHTML='&#128203;';},1500);
+  });
+});
+</script>
+
+{{template "footer" .}}

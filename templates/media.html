@@ -1,0 +1,26 @@
+{{template "header" .}}
+
+{{if eq .MediaType "asciinema"}}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3/dist/bundle/asciinema-player.css">
+{{end}}
+
+<div class="file-bar">
+  <strong>{{.File.Name}}</strong>
+  <span class="meta">{{.File.Size | formatBytes}} · {{.File.Mimetype}} · <a href="{{.RawURL}}">raw</a> · <a href="/{{.File.ID}}/info">info</a></span>
+</div>
+
+<div class="media-box">
+{{if eq .MediaType "video"}}
+  <video controls preload="metadata"><source src="{{.RawURL}}" type="{{.File.Mimetype}}"></video>
+{{else if eq .MediaType "audio"}}
+  <audio controls preload="metadata"><source src="{{.RawURL}}" type="{{.File.Mimetype}}"></audio>
+{{else if eq .MediaType "image"}}
+  <a href="{{.RawURL}}"><img src="{{.RawURL}}" alt="{{.File.Name}}"></a>
+{{else if eq .MediaType "asciinema"}}
+  <div id="player"></div>
+  <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3/dist/bundle/asciinema-player.min.js"></script>
+  <script>AsciinemaPlayer.create('{{.RawURL}}',document.getElementById('player'),{fit:'width',theme:'monokai'});</script>
+{{end}}
+</div>
+
+{{template "footer" .}}

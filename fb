@@ -1,0 +1,274 @@
+#!/bin/bash
+set -e
+
+# Config: override via env or ~/.config/fb/config
+: "${FB_SERVER:=http://localhost:7995}"
+: "${FB_KEY:=}"
+: "${FB_KEY_FILE:=${XDG_CONFIG_HOME:-$HOME/.config}/fb/apikey}"
+: "${FB_CLIP:=auto}"
+
+# Load config file
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/fb/config"
+[[ -f "$conf" ]] && source "$conf"
+
+# Load API key
+[[ -z "$FB_KEY" && -f "$FB_KEY_FILE" ]] && FB_KEY=$(<"$FB_KEY_FILE")
+
+die()  { printf 'error: %s\n' "$1" >&2; exit 1; }
+need_key() { [[ -n "$FB_KEY" ]] || die "no API key — set FB_KEY or put it in $FB_KEY_FILE"; }
+
+clip() {
+  [[ "$FB_CLIP" == "none" ]] && return
+  if [[ "$FB_CLIP" == "auto" ]]; then
+    if [[ -n "$WAYLAND_DISPLAY" ]] && command -v wl-copy &>/dev/null; then
+      printf '%s' "$1" | wl-copy
+    elif [[ -n "$DISPLAY" ]] && command -v xclip &>/dev/null; then
+      printf '%s' "$1" | xclip -selection clipboard
+    elif command -v pbcopy &>/dev/null; then
+      printf '%s' "$1" | pbcopy
+    fi
+  fi
+}
+
+# extract IDs from upload JSON response
+parse_ids() {
+  printf '%s' "$1" | python3 -c "
+import json,sys
+for f in json.load(sys.stdin):
+    print(f['id'])
+" 2>/dev/null || printf '%s' "$1" | sed 's/[^"]*"id":"\([^"]*\)"/\1\n/g'
+}
+
+parse_urls() {
+  printf '%s' "$1" | python3 -c "
+import json,sys
+for f in json.load(sys.stdin):
+    print(f['url'])
+" 2>/dev/null || printf '%s' "$1" | sed 's/[^"]*"url":"\([^"]*\)"/\1\n/g'
+}
+
+# --- commands ---
+
+cmd_upload() {
+  need_key
+
+  # stdin → temp file
+  if (( $# == 0 )); then
+    local tmp
+    tmp=$(mktemp "/tmp/fb-XXXXXX")
+    trap 'rm -f "$tmp"' EXIT
+    [[ -t 0 ]] && printf '^D to send, ^C to cancel\n' >&2
+    cat > "$tmp"
+    local fname="${OPT_NAME:-paste.txt}"
+    local pw_args=()
+    [[ -n "$OPT_PASSWORD" ]] && pw_args=(-F "password=$OPT_PASSWORD")
+    resp=$(curl -sf \
+      -H "Authorization: Bearer $FB_KEY" \
+      -F "file=@$tmp;filename=$fname" \
+      "${pw_args[@]}" \
+      "$FB_SERVER/api/upload")
+  else
+    local curl_args=()
+    for f in "$@"; do
+      [[ -f "$f" ]] || die "not a file: $f"
+      curl_args+=(-F "file=@$f")
+    done
+    [[ -n "$OPT_PASSWORD" ]] && curl_args+=(-F "password=$OPT_PASSWORD")
+    resp=$(curl -sf \
+      -H "Authorization: Bearer $FB_KEY" \
+      "${curl_args[@]}" \
+      "$FB_SERVER/api/upload")
+  fi
+
+  local urls
+  urls=$(parse_urls "$resp")
+  printf '%s\n' "$urls"
+
+  # auto-collection if -C and multiple files
+  if [[ "$OPT_COLLECT" == "1" ]]; then
+    local ids
+    ids=$(parse_ids "$resp")
+    local count
+    count=$(wc -l <<< "$ids")
+    if (( count >= 2 )); then
+      local id_json="" sep=""
+      while IFS= read -r id; do
+        id_json+="${sep}\"$id\""
+        sep=","
+      done <<< "$ids"
+      local col_resp
+      col_resp=$(curl -sf -H "Authorization: Bearer $FB_KEY" -H "Content-Type: application/json" \
+        -d "{\"ids\":[$id_json]}" "$FB_SERVER/api/collection")
+      local col_url
+      col_url=$(printf '%s' "$col_resp" | sed 's/.*"url":"\([^"]*\)".*/\1/')
+      printf 'collection: %s\n' "$col_url"
+      clip "$col_url"
+      return
+    fi
+  fi
+
+  local last
+  last=$(tail -1 <<< "$urls")
+  clip "$last"
+}
+
+cmd_delete() {
+  need_key
+  for id in "$@"; do
+    id=${id#"$FB_SERVER/"}
+    id=${id%%/*}
+    local qs=""
+    [[ "$OPT_DEL_FILES" == "1" ]] && qs="?files=true"
+    if curl -sf -X DELETE -H "Authorization: Bearer $FB_KEY" "$FB_SERVER/api/$id$qs" >/dev/null; then
+      printf 'deleted: %s\n' "$id"
+    else
+      printf 'failed:  %s\n' "$id" >&2
+    fi
+  done
+}
+
+cmd_get() {
+  local pw_args=()
+  [[ -n "$OPT_PASSWORD" ]] && pw_args=(-H "X-Password: $OPT_PASSWORD")
+  for id in "$@"; do
+    id=${id#"$FB_SERVER/"}
+    id=${id%%/*}
+    curl -sf "${pw_args[@]}" "$FB_SERVER/$id/raw"
+  done
+}
+
+cmd_history() {
+  need_key
+  local resp
+  resp=$(curl -sf -H "Authorization: Bearer $FB_KEY" "$FB_SERVER/api/history")
+
+  if [[ "$OPT_RAW" == "1" ]]; then
+    printf '%s' "$resp" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+for f in d['files']:
+    print('\t'.join([f['id'], f['name'], f['mimetype'], str(f['size']), str(f['date'])]))
+for c in d['collections']:
+    print('\t'.join([c['id'], str(len(c['files'])) + ' file(s)', 'collection', '', str(c['date'])]))
+"
+    return
+  fi
+
+  printf '%s' "$resp" | python3 -c "
+import json,sys,datetime
+d = json.load(sys.stdin)
+fmt = '%-8s  %-30s  %-24s  %10s  %s'
+print(fmt % ('ID','NAME','TYPE','SIZE','DATE'))
+print('-' * 100)
+for f in d['files']:
+    dt = datetime.datetime.fromtimestamp(f['date']).strftime('%Y-%m-%d %H:%M')
+    sz = f['size']
+    if sz > 1048576: s = '%.1f MiB' % (sz/1048576)
+    elif sz > 1024:  s = '%.1f KiB' % (sz/1024)
+    else:            s = '%d B' % sz
+    print(fmt % (f['id'], f['name'][:30], f['mimetype'][:24], s, dt))
+for c in d['collections']:
+    dt = datetime.datetime.fromtimestamp(c['date']).strftime('%Y-%m-%d %H:%M')
+    print(fmt % (c['id'], '%d file(s)' % len(c['files']), 'collection', '', dt))
+print()
+print('total: %d files, %d collections, %.1f MiB' % (
+    len(d['files']), len(d['collections']), d['total_size']/1048576))
+"
+}
+
+cmd_collection() {
+  need_key
+  (( $# >= 2 )) || die "usage: fb -c ID ID [ID...]"
+  local ids="" sep=""
+  for id in "$@"; do
+    id=${id#"$FB_SERVER/"}
+    id=${id%%/*}
+    ids+="${sep}\"$id\""
+    sep=","
+  done
+  local pw_json=""
+  [[ -n "$OPT_PASSWORD" ]] && pw_json=",\"password\":\"$OPT_PASSWORD\""
+  local resp
+  resp=$(curl -sf -H "Authorization: Bearer $FB_KEY" -H "Content-Type: application/json" \
+    -d "{\"ids\":[$ids]$pw_json}" "$FB_SERVER/api/collection")
+  local url
+  url=$(printf '%s' "$resp" | sed 's/.*"url":"\([^"]*\)".*/\1/')
+  printf '%s\n' "$url"
+  clip "$url"
+}
+
+# --- main ---
+
+usage() {
+  cat >&2 <<EOF
+usage: fb [options] [file...]
+
+  fb file.txt              upload file(s)
+  fb -p PASS file.txt      upload with password protection
+  fb a.txt b.png           upload multiple files
+  fb -C a.txt b.png        upload and create collection
+  fb                       upload from stdin
+  echo hi | fb             pipe to upload
+  fb -d ID [ID...]         delete
+  fb -dF ID                delete collection and its files
+  fb -g ID [ID...]         download to stdout
+  fb -g -p PASS ID         download password-protected file
+  fb -H                    show history (table)
+  fb -Hr                   show history (tsv, machine-readable)
+  fb -c ID ID [ID...]      create collection
+
+examples:
+  fb -Hr | grep image/jpeg | cut -f1 | xargs fb -d
+  fb -Hr | awk -F'\t' '\$1 ~ /^foo/' | cut -f1 | xargs fb -d
+
+options:
+  -C         create collection when uploading multiple files
+  -F         also delete files inside collections (with -d)
+  -n NAME    filename for stdin upload
+  -p PASS    password protect upload, or unlock on download
+  -r         raw/tsv output (for -H)
+  -s SERVER  server URL (default: \$FB_SERVER)
+  -v         version
+
+env:
+  FB_SERVER   server URL
+  FB_KEY      API key (or put in ~/.config/fb/apikey)
+  FB_CLIP     clipboard: auto, none
+EOF
+  exit 1
+}
+
+OPT_NAME=""
+OPT_COLLECT=""
+OPT_RAW=""
+OPT_DEL_FILES=""
+OPT_PASSWORD=""
+MODE="upload"
+
+while getopts "n:s:p:dDgGHhcCFrv" opt; do
+  case "$opt" in
+    n) OPT_NAME="$OPTARG" ;;
+    s) FB_SERVER="$OPTARG" ;;
+    p) OPT_PASSWORD="$OPTARG" ;;
+    d|D) MODE="delete" ;;
+    g|G) MODE="get" ;;
+    H) MODE="history" ;;
+    c) MODE="collection" ;;
+    C) OPT_COLLECT="1" ;;
+    F) OPT_DEL_FILES="1" ;;
+    r) OPT_RAW="1" ;;
+    v) echo "fb 1.0.0"; exit 0 ;;
+    *) usage ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+FB_SERVER="${FB_SERVER%/}"
+
+case "$MODE" in
+  upload)     cmd_upload "$@" ;;
+  delete)     cmd_delete "$@" ;;
+  get)        cmd_get "$@" ;;
+  history)    cmd_history ;;
+  collection) cmd_collection "$@" ;;
+esac

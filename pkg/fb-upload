@@ -1,0 +1,25 @@
+#!/bin/sh
+# fb-upload — upload files via fb and show a desktop notification
+
+if [ $# -eq 0 ]; then
+    notify-send -a filebin "filebin" "No files selected"
+    exit 1
+fi
+
+notify-send -a filebin -t 2000 "filebin" "Uploading $# file(s)..."
+
+if [ $# -ge 2 ]; then
+    url=$(fb -C "$@" 2>/dev/null | grep '^collection:' | sed 's/^collection: //') || true
+else
+    url=$(fb "$@" 2>/dev/null) || true
+fi
+
+if [ -z "$url" ]; then
+    notify-send -a filebin -i dialog-error "Upload failed" "Could not upload files"
+    exit 1
+fi
+
+action=$(notify-send -a filebin "Upload complete" "$url" \
+    --action=open="Open in Browser" 2>/dev/null) || true
+
+[ "$action" = "open" ] && xdg-open "$url" &

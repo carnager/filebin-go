@@ -1,0 +1,69 @@
+{{template "header" .}}
+
+<div class="page-bar">
+  <h2>Gallery</h2>
+  <div class="tabs">
+    <a href="/history">List</a>
+    <a href="/gallery" class="active">Gallery</a>
+  </div>
+</div>
+
+{{if not .Files}}
+  <p class="meta">No images yet.</p>
+{{else}}
+  <div class="grid">
+    {{range .Files}}
+    <a href="/{{.ID}}" class="thumb gallery-item" data-raw="/{{.ID}}/raw" data-name="{{.Name}}">
+      <img src="/{{.ID}}/raw" alt="{{.Name}}" loading="lazy">
+      <span>{{.Name}}</span>
+    </a>
+    {{end}}
+  </div>
+
+  <!-- Lightbox -->
+  <div class="lightbox" id="lightbox">
+    <button class="lightbox-close" id="lb-close">&times;</button>
+    <button class="lightbox-prev" id="lb-prev">&#8249;</button>
+    <button class="lightbox-next" id="lb-next">&#8250;</button>
+    <div class="lightbox-content">
+      <img id="lb-img" src="" alt="">
+      <div class="lightbox-caption" id="lb-caption"></div>
+      <div class="lightbox-counter" id="lb-counter"></div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    var items=document.querySelectorAll('.gallery-item');
+    if(!items.length)return;
+    var lb=document.getElementById('lightbox');
+    var img=document.getElementById('lb-img');
+    var cap=document.getElementById('lb-caption');
+    var ctr=document.getElementById('lb-counter');
+    var idx=0;
+    var urls=[], names=[];
+    items.forEach(function(el,i){
+      urls.push(el.getAttribute('data-raw'));
+      names.push(el.getAttribute('data-name'));
+      el.addEventListener('click',function(e){e.preventDefault();open(i);});
+    });
+    function open(i){idx=i;show();lb.classList.add('open');document.body.style.overflow='hidden';}
+    function close(){lb.classList.remove('open');document.body.style.overflow='';}
+    function show(){img.src=urls[idx];cap.textContent=names[idx];ctr.textContent=(idx+1)+' / '+urls.length;}
+    function prev(){idx=(idx-1+urls.length)%urls.length;show();}
+    function next(){idx=(idx+1)%urls.length;show();}
+    document.getElementById('lb-close').addEventListener('click',close);
+    document.getElementById('lb-prev').addEventListener('click',prev);
+    document.getElementById('lb-next').addEventListener('click',next);
+    lb.addEventListener('click',function(e){if(e.target===lb)close();});
+    document.addEventListener('keydown',function(e){
+      if(!lb.classList.contains('open'))return;
+      if(e.key==='Escape')close();
+      else if(e.key==='ArrowLeft')prev();
+      else if(e.key==='ArrowRight')next();
+    });
+  })();
+  </script>
+{{end}}
+
+{{template "footer" .}}

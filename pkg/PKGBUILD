@@ -1,0 +1,48 @@
+pkgbase=filebin
+pkgname=('filebin' 'fb')
+pkgver=1.0.0
+pkgrel=1
+arch=('x86_64' 'aarch64')
+url='https://github.com/carnager/filebin-go'
+license=('MIT')
+makedepends=('go')
+source=()
+
+build() {
+    cd "$startdir/.."
+    export CGO_ENABLED=0
+    go build -trimpath -ldflags="-s -w" -o filebin .
+}
+
+package_filebin() {
+    pkgdesc='Simple, self-hosted paste/file server with syntax highlighting, media support, and collections'
+    depends=('glibc')
+    backup=('var/lib/filebin/apikeys')
+    install=filebin.install
+
+    cd "$startdir/.."
+
+    install -Dm755 filebin "$pkgdir/usr/bin/filebin"
+    install -Dm644 pkg/filebin.service "$pkgdir/usr/lib/systemd/system/filebin.service"
+    install -Dm644 pkg/filebin.sysusers "$pkgdir/usr/lib/sysusers.d/filebin.conf"
+    install -Dm644 pkg/filebin.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/filebin.conf"
+}
+
+package_fb() {
+    pkgdesc='CLI client and file manager integration for filebin'
+    depends=('curl')
+    optdepends=(
+        'python: pretty history output'
+        'wl-clipboard: Wayland clipboard support'
+        'xclip: X11 clipboard support'
+        'libnotify: desktop notifications for fb-upload'
+        'xdg-utils: open URLs from notifications'
+    )
+
+    cd "$startdir/.."
+
+    install -Dm755 fb "$pkgdir/usr/bin/fb"
+    install -Dm755 pkg/fb-upload "$pkgdir/usr/bin/fb-upload"
+    install -Dm644 pkg/fb-upload.desktop "$pkgdir/usr/share/Thunar/sendto/fb-upload.desktop"
+    install -Dm644 pkg/fb-upload.desktop "$pkgdir/usr/share/applications/fb-upload.desktop"
+}

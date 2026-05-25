@@ -1,0 +1,19 @@
+# Binary
+filebin
+
+# Data
+data/
+
+# Go build/module cache
+.gobuild/
+.gomodcache/
+
+# Arch packaging artifacts
+pkg/*.pkg.tar.zst
+pkg/pkg/
+pkg/src/
+pkg/.gobuild/
+pkg/.gomodcache/
+
+# Test files
+*.cast

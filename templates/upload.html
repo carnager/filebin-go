@@ -1,0 +1,32 @@
+{{template "header" .}}
+
+{{if not .LoggedIn}}
+  <p class="notice"><a href="/login">Login</a> to upload.</p>
+{{else}}
+<form method="post" action="/upload" enctype="multipart/form-data" class="upload-form">
+  <section class="card">
+    <h3>Paste text</h3>
+    <input type="text" name="name" placeholder="filename (optional)" class="input">
+    <textarea name="content" rows="10" placeholder="paste here..." class="mono"></textarea>
+  </section>
+
+  <div class="divider"><span>and / or</span></div>
+
+  <section class="card">
+    <h3>Upload files</h3>
+    <input type="file" name="file" multiple id="file-input" hidden>
+    <label for="file-input" class="drop-zone" id="drop-zone">Drop files here or click to browse</label>
+    <div id="file-list" class="file-list"></div>
+  </section>
+
+  <section class="card">
+    <h3>Options</h3>
+    <input type="password" name="password" placeholder="Password (optional)" class="input" autocomplete="off">
+  </section>
+
+  <button type="submit" class="btn primary">Upload</button>
+</form>
+{{end}}
+
+<script src="/static/app.js"></script>
+{{template "footer" .}}
