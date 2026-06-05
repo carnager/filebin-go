@@ -4,6 +4,7 @@
   <p class="notice"><a href="/login">Login</a> to upload.</p>
 {{else}}
 <form method="post" action="/upload" enctype="multipart/form-data" class="upload-form">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <section class="card">
     <h3>Paste text</h3>
     <input type="text" name="name" placeholder="filename (optional)" class="input">

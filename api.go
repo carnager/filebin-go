@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -51,6 +52,7 @@ func (s *Server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.apiAuth(w, r) {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadSize+(1<<20))
 	if err := r.ParseMultipartForm(s.cfg.MaxUploadSize + (1 << 20)); err != nil {
 		apiErr(w, "request too large", http.StatusRequestEntityTooLarge)
 		return
@@ -81,7 +83,8 @@ func (s *Server) handleAPIUpload(w http.ResponseWriter, r *http.Request) {
 		meta, err := s.store.SaveFile(f, fh.Filename, 3, 6, password)
 		f.Close()
 		if err != nil {
-			apiErr(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("api upload: %v", err)
+			apiErr(w, "failed to save file", http.StatusInternalServerError)
 			return
 		}
 		out = append(out, result{ID: meta.ID, URL: baseURL(r) + "/" + meta.ID, Name: meta.Name, Size: meta.Size})
@@ -132,7 +135,8 @@ func (s *Server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 
 	if s.store.FileExists(id) {
 		if err := s.store.DeleteFile(id); err != nil {
-			apiErr(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("api delete file: %v", err)
+			apiErr(w, "failed to delete", http.StatusInternalServerError)
 			return
 		}
 	} else if s.store.CollectionExists(id) {
@@ -144,7 +148,8 @@ func (s *Server) handleAPIDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.store.DeleteCollection(id); err != nil {
-			apiErr(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("api delete collection: %v", err)
+			apiErr(w, "failed to delete", http.StatusInternalServerError)
 			return
 		}
 	} else {

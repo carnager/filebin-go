@@ -2,6 +2,11 @@ package main
 
 import (
 	"archive/tar"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -22,6 +27,8 @@ type PageData struct {
 	LoggedIn  bool
 	Flash     string
 	FlashType string
+	CSRFToken string
+	Next      string
 
 	File      *FileMeta
 	Highlight template.HTML
@@ -68,12 +75,51 @@ func (s *Server) requireLogin(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// --- CSRF protection ---
+
+func (s *Server) ensureCSRF(w http.ResponseWriter, r *http.Request) string {
+	if c, err := r.Cookie("csrf"); err == nil && len(c.Value) == 64 {
+		return c.Value
+	}
+	b := make([]byte, 32)
+	rand.Read(b)
+	token := hex.EncodeToString(b)
+	http.SetCookie(w, &http.Cookie{
+		Name: "csrf", Value: token, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
+	return token
+}
+
+func (s *Server) validateCSRF(r *http.Request) bool {
+	c, err := r.Cookie("csrf")
+	if err != nil || len(c.Value) != 64 {
+		return false
+	}
+	token := r.FormValue("csrf_token")
+	if token == "" {
+		token = r.Header.Get("X-CSRF-Token")
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) == 1
+}
+
+// --- Unlock cookie HMAC ---
+
+func (s *Server) unlockValue(id string) string {
+	mac := hmac.New(sha256.New, s.secret)
+	mac.Write([]byte(id))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // --- Password protection ---
 
 // hasUnlock checks if the user has a cookie granting access to this specific ID.
 func (s *Server) hasUnlock(r *http.Request, id string) bool {
 	c, err := r.Cookie("unlock_" + id)
-	return err == nil && c.Value == "1"
+	if err != nil || c.Value == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.unlockValue(id))) == 1
 }
 
 // hasCollectionUnlock checks if a file is unlocked via a collection password.
@@ -110,44 +156,56 @@ func (s *Server) handlePasswordCheck(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	if r.Method == http.MethodPost {
+		if !s.validateCSRF(r) {
+			s.renderErr(w, "Invalid request", http.StatusForbidden)
+			return false
+		}
 		pw := r.FormValue("password")
 		if pw != "" && check(pw) {
 			http.SetCookie(w, &http.Cookie{
-				Name: "unlock_" + id, Value: "1", Path: "/",
+				Name: "unlock_" + id, Value: s.unlockValue(id), Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteLaxMode,
 				MaxAge: 86400, // 24 hours
 			})
 			http.Redirect(w, r, r.URL.Path, http.StatusSeeOther)
 			return false
 		}
-		s.render(w, "password", PageData{Title: "Password Required", Flash: "Wrong password", FlashType: "error"})
+		s.render(w, "password", PageData{Title: "Password Required", Flash: "Wrong password", FlashType: "error", CSRFToken: s.ensureCSRF(w, r)})
 		return false
 	}
-	s.render(w, "password", PageData{Title: "Password Required"})
+	s.render(w, "password", PageData{Title: "Password Required", CSRFToken: s.ensureCSRF(w, r)})
 	return false
 }
 
 // --- Pages ---
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "upload", PageData{LoggedIn: s.loggedIn(r)})
+	s.render(w, "upload", PageData{LoggedIn: s.loggedIn(r), CSRFToken: s.ensureCSRF(w, r)})
 }
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "login", PageData{Title: "Login"})
+	next := r.URL.Query().Get("next")
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		next = "/"
+	}
+	s.render(w, "login", PageData{Title: "Login", Next: next, CSRFToken: s.ensureCSRF(w, r)})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.validateCSRF(r) {
+		s.renderErr(w, "Invalid request", http.StatusForbidden)
+		return
+	}
 	key := strings.TrimSpace(r.FormValue("apikey"))
+	next := r.FormValue("next")
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		next = "/"
+	}
 	if !s.store.ValidAPIKey(key) {
-		s.render(w, "login", PageData{Title: "Login", Flash: "Invalid API key", FlashType: "error"})
+		s.render(w, "login", PageData{Title: "Login", Flash: "Invalid API key", FlashType: "error", CSRFToken: s.ensureCSRF(w, r), Next: next})
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "apikey", Value: key, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	next := r.FormValue("next")
-	if next == "" {
-		next = "/"
-	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
@@ -327,7 +385,15 @@ func (s *Server) handleWebUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireLogin(w, r) {
 		return
 	}
-	r.ParseMultipartForm(s.cfg.MaxUploadSize + (1 << 20))
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadSize+(1<<20))
+	if err := r.ParseMultipartForm(s.cfg.MaxUploadSize + (1 << 20)); err != nil {
+		s.renderErr(w, "Upload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if !s.validateCSRF(r) {
+		s.renderErr(w, "Invalid request", http.StatusForbidden)
+		return
+	}
 
 	password := r.FormValue("password")
 	var ids []string
@@ -340,7 +406,8 @@ func (s *Server) handleWebUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		meta, err := s.store.SaveFileFromBytes([]byte(content), name, 3, 6, password)
 		if err != nil {
-			s.renderErr(w, err.Error(), 500)
+			log.Printf("save paste: %v", err)
+			s.renderErr(w, "Failed to save paste", 500)
 			return
 		}
 		ids = append(ids, meta.ID)
@@ -357,7 +424,8 @@ func (s *Server) handleWebUpload(w http.ResponseWriter, r *http.Request) {
 				meta, err := s.store.SaveFile(f, fh.Filename, 3, 6, password)
 				f.Close()
 				if err != nil {
-					s.renderErr(w, err.Error(), 500)
+					log.Printf("save file: %v", err)
+					s.renderErr(w, "Failed to save file", 500)
 					return
 				}
 				ids = append(ids, meta.ID)
@@ -375,7 +443,8 @@ func (s *Server) handleWebUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	col, err := s.store.SaveCollection(ids, 3, 6, password)
 	if err != nil {
-		s.renderErr(w, err.Error(), 500)
+		log.Printf("save collection: %v", err)
+		s.renderErr(w, "Failed to create collection", 500)
 		return
 	}
 	http.Redirect(w, r, "/"+col.ID, http.StatusSeeOther)
@@ -386,6 +455,10 @@ func (s *Server) handleWebDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.ParseForm()
+	if !s.validateCSRF(r) {
+		s.renderErr(w, "Invalid request", http.StatusForbidden)
+		return
+	}
 	deleteFiles := r.FormValue("delete_files") == "1"
 	for _, id := range r.Form["ids"] {
 		if s.store.FileExists(id) {
@@ -409,6 +482,10 @@ func (s *Server) handleWebCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.ParseForm()
+	if !s.validateCSRF(r) {
+		s.renderErr(w, "Invalid request", http.StatusForbidden)
+		return
+	}
 	ids := r.Form["ids"]
 	if len(ids) == 0 {
 		s.renderErr(w, "no files selected", 400)
@@ -416,7 +493,7 @@ func (s *Server) handleWebCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := s.store.SaveCollection(ids, 3, 6)
 	if err != nil {
-		s.renderErr(w, err.Error(), 400)
+		s.renderErr(w, "Failed to create collection", 400)
 		return
 	}
 	http.Redirect(w, r, "/history", http.StatusSeeOther)
@@ -440,6 +517,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "history", PageData{
 		Title: "History", LoggedIn: true,
 		Files: files, Collections: cols, TotalSize: total,
+		CSRFToken: s.ensureCSRF(w, r),
 	})
 }
 

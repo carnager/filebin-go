@@ -9,6 +9,7 @@
 </div>
 
 <form method="post" id="hform">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <div class="actions">
     <input type="hidden" name="delete_files" id="delete_files" value="0">
     <button type="submit" formaction="/delete" class="btn danger sm" onclick="return confirmDelete()">Delete</button>

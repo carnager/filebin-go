@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"embed"
 	"flag"
 	"fmt"
@@ -31,6 +32,7 @@ type Server struct {
 	mux       *http.ServeMux
 	tmpls     map[string]*template.Template
 	chromaCSS template.CSS
+	secret    []byte
 }
 
 func main() {
@@ -61,6 +63,10 @@ func main() {
 
 func NewServer(cfg Config, store *Store) *Server {
 	s := &Server{cfg: cfg, store: store}
+	s.secret = make([]byte, 32)
+	if _, err := rand.Read(s.secret); err != nil {
+		log.Fatalf("failed to generate server secret: %v", err)
+	}
 	s.chromaCSS = template.CSS(generateChromaCSS())
 	s.loadTemplates()
 	s.registerRoutes()
@@ -117,6 +123,9 @@ func (s *Server) registerRoutes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	s.mux.ServeHTTP(w, r)
 }
 

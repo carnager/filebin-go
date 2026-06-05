@@ -17,9 +17,9 @@
 {{else if eq .MediaType "image"}}
   <a href="{{.RawURL}}"><img src="{{.RawURL}}" alt="{{.File.Name}}"></a>
 {{else if eq .MediaType "asciinema"}}
-  <div id="player"></div>
+  <div id="player" data-url="{{.RawURL}}"></div>
   <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3/dist/bundle/asciinema-player.min.js"></script>
-  <script>AsciinemaPlayer.create('{{.RawURL}}',document.getElementById('player'),{fit:'width',theme:'monokai'});</script>
+  <script>AsciinemaPlayer.create(document.getElementById('player').dataset.url,document.getElementById('player'),{fit:'width',theme:'monokai'});</script>
 {{end}}
 </div>
 
