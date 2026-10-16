@@ -78,6 +78,9 @@ func NewServer(cfg Config, store *Store) *Server {
 	s.lexers = lexerOptions()
 	s.loadTemplates()
 	s.registerRoutes()
+	if files, err := store.ListFiles(); err == nil {
+		s.pregenThumbs(files...)
+	}
 	return s
 }
 

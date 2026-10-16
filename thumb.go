@@ -9,7 +9,9 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"os"
+	"runtime"
 	"sync"
 
 	"golang.org/x/image/draw"
@@ -18,7 +20,50 @@ import (
 
 const thumbMax = 400
 
-var thumbMu sync.Mutex
+var (
+	thumbSem   = make(chan struct{}, max(1, runtime.NumCPU()))
+	thumbMu    sync.Mutex
+	thumbLocks = map[string]*sync.Mutex{}
+)
+
+// thumbLock serialises generation per blob so concurrent requests for the same
+// image wait for one encode, while different images are generated in parallel.
+func thumbLock(hash string) func() {
+	thumbMu.Lock()
+	l, ok := thumbLocks[hash]
+	if !ok {
+		l = &sync.Mutex{}
+		thumbLocks[hash] = l
+	}
+	thumbMu.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		thumbMu.Lock()
+		if thumbLocks[hash] == l && l.TryLock() {
+			delete(thumbLocks, hash)
+			l.Unlock()
+		}
+		thumbMu.Unlock()
+	}
+}
+
+// pregenThumbs builds missing thumbnails in the background, e.g. after an upload or at startup.
+func (s *Server) pregenThumbs(metas ...*FileMeta) {
+	go func() {
+		for _, m := range metas {
+			if !canThumb(m.Mimetype) {
+				continue
+			}
+			if _, err := os.Stat(s.store.ThumbPath(m.Hash)); err == nil {
+				continue
+			}
+			if _, err := s.thumbnail(m); err != nil && !errors.Is(err, errNotFound) {
+				log.Printf("thumb %s: %v", m.ID, err)
+			}
+		}
+	}()
+}
 
 // thumbnail returns the path of a cached JPEG thumbnail for meta, generating it if needed.
 func (s *Server) thumbnail(meta *FileMeta) (string, error) {
@@ -29,8 +74,12 @@ func (s *Server) thumbnail(meta *FileMeta) (string, error) {
 	if _, err := os.Stat(out); err == nil {
 		return out, nil
 	}
-	thumbMu.Lock()
-	defer thumbMu.Unlock()
+	defer thumbLock(meta.Hash)()
+	if _, err := os.Stat(out); err == nil {
+		return out, nil
+	}
+	thumbSem <- struct{}{}
+	defer func() { <-thumbSem }()
 	if _, err := os.Stat(out); err == nil {
 		return out, nil
 	}
@@ -54,6 +103,13 @@ func (s *Server) thumbnail(meta *FileMeta) (string, error) {
 		} else {
 			w, h = max(1, w*thumbMax/h), thumbMax
 		}
+	}
+	// Big sources: cheap bilinear pass down to 4x the target first, since
+	// CatmullRom's cost grows with the source size (≈6x faster on 12MP photos).
+	if b.Dx() > 4*w && b.Dy() > 4*h {
+		mid := image.NewRGBA(image.Rect(0, 0, 4*w, 4*h))
+		draw.ApproxBiLinear.Scale(mid, mid.Bounds(), src, b, draw.Src, nil)
+		src, b = mid, mid.Bounds()
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src) // flatten transparency for JPEG

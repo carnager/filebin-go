@@ -1,6 +1,6 @@
 pkgbase=filebin
 pkgname=('filebin' 'fb')
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 arch=('x86_64' 'aarch64')
 url='https://github.com/carnager/filebin-go'

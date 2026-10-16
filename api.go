@@ -170,6 +170,7 @@ func (s *Server) saveUploads(headers []*multipart.FileHeader, o ItemOpts) ([]*Fi
 		}
 		out = append(out, meta)
 	}
+	s.pregenThumbs(out...)
 	return out, nil
 }
 
