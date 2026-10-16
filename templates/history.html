@@ -3,105 +3,69 @@
 <div class="page-bar">
   <h2>History</h2>
   <div class="tabs">
-    <a href="/history" class="active">List</a>
+    <a href="/history" class="active" aria-current="page">List</a>
     <a href="/gallery">Gallery</a>
   </div>
 </div>
 
-<form method="post" id="hform">
+<div class="hist-tools">
+  <input type="search" id="h-search" class="input" placeholder="Search name or ID…" aria-label="Search history">
+  <div class="chips" role="group" aria-label="Filter by type">
+    <button type="button" class="chip active" data-filter="" aria-pressed="true">All</button>
+    <button type="button" class="chip" data-filter="image" aria-pressed="false">Images</button>
+    <button type="button" class="chip" data-filter="video" aria-pressed="false">Video</button>
+    <button type="button" class="chip" data-filter="audio" aria-pressed="false">Audio</button>
+    <button type="button" class="chip" data-filter="text" aria-pressed="false">Text</button>
+    <button type="button" class="chip" data-filter="other" aria-pressed="false">Other</button>
+    <button type="button" class="chip" data-filter="collection" aria-pressed="false">Collections</button>
+  </div>
+  <label class="sr-only" for="h-sort">Sort by</label>
+  <select id="h-sort" class="input sm">
+    <option value="date">Newest first</option>
+    <option value="name">Name</option>
+    <option value="size">Largest first</option>
+  </select>
+</div>
+
+<form method="post" id="hform" action="/delete">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <input type="hidden" name="delete_files" id="delete_files" value="0">
   <div class="actions">
-    <input type="hidden" name="delete_files" id="delete_files" value="0">
-    <button type="submit" formaction="/delete" class="btn danger sm" onclick="return confirmDelete()">Delete</button>
-    <button type="submit" formaction="/collection" class="btn sm" id="btn-col" style="display:none">Collection</button>
-    <span class="meta ml-auto">{{len .Files}} files · {{len .Collections}} collections · {{.TotalSize | formatBytes}}</span>
+    <button type="button" class="btn danger sm" id="btn-del" disabled>{{template "icon" "trash"}}<span>Delete</span></button>
+    <button type="button" class="btn sm" id="btn-col" disabled>{{template "icon" "collection"}}<span>New collection</span></button>
+    {{if .Collections}}<button type="button" class="btn sm" id="btn-add" disabled>Add to collection…</button>{{end}}
+    <span class="meta" id="sel-count" aria-live="polite"></span>
+    <span class="meta ml-auto">{{.NFiles}} files · {{.NCols}} collections · {{.TotalSize | formatBytes}}</span>
   </div>
 
-  <table>
+  <table class="hist" id="hist">
     <thead><tr>
-      <th class="w-check"><input type="checkbox" id="ckall"></th>
-      <th>ID</th><th>Name</th><th>Type</th><th>Date</th><th>Size</th>
+      <th class="w-check"><input type="checkbox" id="ckall" aria-label="Select all visible"></th>
+      <th>Name</th><th class="c-id">ID</th><th class="c-type">Type</th><th class="c-date">Date</th><th class="c-size">Size</th><th class="c-act"><span class="sr-only">Actions</span></th>
     </tr></thead>
     <tbody>
-    {{range .Collections}}
-      <tr>
-        <td><input type="checkbox" name="ids" value="{{.ID}}"></td>
-        <td><a href="/{{.ID}}">{{.ID}}</a></td>
-        <td>{{len .Files}} file(s)</td>
-        <td>collection</td>
-        <td>{{.Date | formatDate}}</td>
-        <td>—</td>
-      </tr>
-    {{end}}
-    {{range .Files}}
-      <tr>
-        <td><input type="checkbox" name="ids" value="{{.ID}}"></td>
-        <td><a href="/{{.ID}}">{{.ID}}</a></td>
-        <td>{{.Name}}</td>
-        <td>{{.Mimetype}}</td>
-        <td>{{.Date | formatDate}}</td>
-        <td>{{.Size | formatBytes}}</td>
+    {{range .Items}}
+      <tr data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-size="{{.Size}}" data-date="{{.Date}}"{{if .IsCol}} data-col="1"{{end}}>
+        <td class="c-check"><input type="checkbox" name="ids" value="{{.ID}}" aria-label="Select {{.Name}}"></td>
+        <td class="c-name">
+          <a href="/{{.ID}}" class="row-name">
+            {{if .Thumb}}<img class="row-thumb" src="/{{.ID}}/thumb" alt="" loading="lazy" width="40" height="40">{{else}}<span class="row-icon">{{template "kindicon" .Kind}}</span>{{end}}
+            <span class="row-title">{{.Name}}{{if .IsCol}} <span class="meta">({{.Count}} file{{if ne .Count 1}}s{{end}})</span>{{end}}</span>
+          </a>
+          <span class="row-badges">{{template "badges" .}}</span>
+        </td>
+        <td class="c-id"><code>{{.ID}}</code></td>
+        <td class="c-type">{{.Type}}</td>
+        <td class="c-date">{{.Date | formatDate}}</td>
+        <td class="c-size">{{.Size | formatBytes}}</td>
+        <td class="c-act"><button type="button" class="icon-btn" data-copy="/{{.ID}}" aria-label="Copy link to {{.Name}}" title="Copy link">{{template "icon" "link"}}</button></td>
       </tr>
     {{end}}
     </tbody>
   </table>
+  <p class="meta empty-note" id="h-empty" {{if .Items}}hidden{{end}}>{{if .Items}}No matching items.{{else}}Nothing uploaded yet.{{end}}</p>
 </form>
 
-<div class="modal-overlay" id="modal">
-  <div class="modal">
-    <h3 id="modal-title">Delete selected?</h3>
-    <p id="modal-desc">This cannot be undone.</p>
-    <label class="check" id="modal-check-wrap" style="display:none">
-      <input type="checkbox" id="modal-check">
-      Also delete files inside collections
-    </label>
-    <div class="modal-actions">
-      <button class="btn sm" id="modal-cancel">Cancel</button>
-      <button class="btn sm danger" id="modal-confirm">Delete</button>
-    </div>
-  </div>
-</div>
+<select id="col-options" hidden>{{range .Collections}}<option value="{{.ID}}">{{.Title}} · {{.ID}} ({{len .Files}} files)</option>{{end}}</select>
 
-<script>
-function updateColBtn(){
-  var checked=document.querySelectorAll('input[name=ids]:checked');
-  var files=0;
-  checked.forEach(function(b){var row=b.closest('tr');if(row){var td=row.querySelector('td:nth-child(4)');if(td&&td.textContent!=='collection')files++;}});
-  document.getElementById('btn-col').style.display=files>=2?'':'none';
-}
-document.getElementById('ckall').onchange=function(){document.querySelectorAll('input[name=ids]').forEach(c=>c.checked=this.checked);updateColBtn()};
-document.querySelectorAll('input[name=ids]').forEach(function(c){c.addEventListener('change',updateColBtn)});
-
-(function(){
-  var modal=document.getElementById('modal');
-  var check=document.getElementById('modal-check');
-  var checkWrap=document.getElementById('modal-check-wrap');
-  var form=document.getElementById('hform');
-  var pending=false;
-
-  modal.addEventListener('click',function(e){if(e.target===modal)closeModal()});
-  document.getElementById('modal-cancel').addEventListener('click',closeModal);
-  document.getElementById('modal-confirm').addEventListener('click',function(){
-    if(check.checked)document.getElementById('delete_files').value='1';
-    closeModal();
-    pending=true;
-    form.action='/delete';
-    form.submit();
-  });
-
-  function closeModal(){modal.classList.remove('open');check.checked=false;checkWrap.style.display='none';}
-
-  window.confirmDelete=function(){
-    var boxes=document.querySelectorAll('input[name=ids]:checked');
-    if(!boxes.length)return false;
-    var n=boxes.length;
-    var hasColl=false;
-    boxes.forEach(function(b){var row=b.closest('tr');if(row){var td=row.querySelector('td:nth-child(4)');if(td&&td.textContent==='collection')hasColl=true;}});
-    document.getElementById('modal-title').textContent='Delete '+n+' item'+(n>1?'s':'')+'?';
-    checkWrap.style.display=hasColl?'flex':'none';
-    modal.classList.add('open');
-    return false;
-  };
-})();
-</script>
 {{template "footer" .}}

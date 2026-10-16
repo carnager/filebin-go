@@ -5,9 +5,11 @@
 {{end}}
 
 <div class="file-bar">
-  <strong>{{.File.Name}}</strong>
-  <span class="meta">{{.File.Size | formatBytes}} · {{.File.Mimetype}} · <a href="{{.RawURL}}">raw</a> · <a href="/{{.File.ID}}/info">info</a></span>
+  <div class="file-title"><strong data-title>{{.File.Name}}</strong>{{template "badges" (dict "Protected" .File.IsProtected "Burn" .File.Burn "Expires" .Expires)}}</div>
+  <span class="meta">{{.File.Size | formatBytes}} · {{typeLabel .File.Mimetype}} · {{.File.Date | formatDate}}</span>
+  {{template "sharebar" .}}
 </div>
+{{if .Burned}}<div class="alert warn" role="status">Burn after reading: this file has been removed from the server once loaded and can't be opened again.</div>{{end}}
 
 <div class="media-box">
 {{if eq .MediaType "video"}}

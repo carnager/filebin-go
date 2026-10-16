@@ -30,27 +30,60 @@ clip() {
   fi
 }
 
-# extract IDs from upload JSON response
-parse_ids() {
-  printf '%s' "$1" | python3 -c "
-import json,sys
-for f in json.load(sys.stdin):
-    print(f['id'])
-" 2>/dev/null || printf '%s' "$1" | sed 's/[^"]*"id":"\([^"]*\)"/\1\n/g'
+# run curl, store body in $resp; on HTTP errors die with the server's error message
+call() {
+  local out code msg
+  out=$(curl -sS -w '\n%{http_code}' "$@") || die "request to $FB_SERVER failed"
+  code=${out##*$'\n'}
+  resp=${out%$'\n'*}
+  if (( code >= 400 )); then
+    msg=$(printf '%s' "$resp" | json_field error)
+    die "${msg:-HTTP $code}"
+  fi
 }
 
+json_field() {
+  python3 -c "
+import json,sys
+v = json.load(sys.stdin).get('$1')
+print('' if v is None else v)
+" 2>/dev/null || sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"
+}
+
+# file URLs from an upload response ({"files":[...],"collection":...})
 parse_urls() {
   printf '%s' "$1" | python3 -c "
 import json,sys
-for f in json.load(sys.stdin):
+d = json.load(sys.stdin)
+for f in (d['files'] if isinstance(d, dict) else d):
     print(f['url'])
-" 2>/dev/null || printf '%s' "$1" | sed 's/[^"]*"url":"\([^"]*\)"/\1\n/g'
+" 2>/dev/null || printf '%s' "$1" | sed 's/"collection":{.*//' | grep -o '"url":"[^"]*"' | sed 's/"url":"\(.*\)"/\1/'
+}
+
+parse_col_url() {
+  printf '%s' "$1" | python3 -c "
+import json,sys
+c = json.load(sys.stdin).get('collection')
+if c: print(c['url'])
+" 2>/dev/null || printf '%s' "$1" | sed -n 's/.*"collection":{.*"url":"\([^"]*\)".*/\1/p'
+}
+
+# json string escaping for hand-built request bodies
+jstr() {
+  local s=${1//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '"%s"' "$s"
 }
 
 # --- commands ---
 
 cmd_upload() {
   need_key
+  local args=()
+  [[ -n "$OPT_PASSWORD" ]] && args+=(-F "password=$OPT_PASSWORD")
+  [[ -n "$OPT_EXPIRES" ]] && args+=(-F "expires=$OPT_EXPIRES")
+  [[ "$OPT_BURN" == "1" ]] && args+=(-F "burn=true")
+  [[ "$OPT_COLLECT" == "1" ]] && args+=(-F "collection=true")
 
   # stdin → temp file
   if (( $# == 0 )); then
@@ -59,57 +92,31 @@ cmd_upload() {
     trap 'rm -f "$tmp"' EXIT
     [[ -t 0 ]] && printf '^D to send, ^C to cancel\n' >&2
     cat > "$tmp"
-    local fname="${OPT_NAME:-paste.txt}"
-    local pw_args=()
-    [[ -n "$OPT_PASSWORD" ]] && pw_args=(-F "password=$OPT_PASSWORD")
-    resp=$(curl -sf \
-      -H "Authorization: Bearer $FB_KEY" \
-      -F "file=@$tmp;filename=$fname" \
-      "${pw_args[@]}" \
-      "$FB_SERVER/api/upload")
+    args+=(-F "file=@$tmp;filename=${OPT_NAME:-paste.txt}")
   else
-    local curl_args=()
     for f in "$@"; do
       [[ -f "$f" ]] || die "not a file: $f"
-      curl_args+=(-F "file=@$f")
+      args+=(-F "file=@$f")
     done
-    [[ -n "$OPT_PASSWORD" ]] && curl_args+=(-F "password=$OPT_PASSWORD")
-    resp=$(curl -sf \
-      -H "Authorization: Bearer $FB_KEY" \
-      "${curl_args[@]}" \
-      "$FB_SERVER/api/upload")
+    [[ "$OPT_COLLECT" == "1" && -n "$OPT_NAME" ]] && args+=(-F "collection_name=$OPT_NAME")
   fi
 
-  local urls
+  call -H "Authorization: Bearer $FB_KEY" "${args[@]}" "$FB_SERVER/api/upload"
+
+  local urls col_url
   urls=$(parse_urls "$resp")
   printf '%s\n' "$urls"
 
-  # auto-collection if -C and multiple files
   if [[ "$OPT_COLLECT" == "1" ]]; then
-    local ids
-    ids=$(parse_ids "$resp")
-    local count
-    count=$(wc -l <<< "$ids")
-    if (( count >= 2 )); then
-      local id_json="" sep=""
-      while IFS= read -r id; do
-        id_json+="${sep}\"$id\""
-        sep=","
-      done <<< "$ids"
-      local col_resp
-      col_resp=$(curl -sf -H "Authorization: Bearer $FB_KEY" -H "Content-Type: application/json" \
-        -d "{\"ids\":[$id_json]}" "$FB_SERVER/api/collection")
-      local col_url
-      col_url=$(printf '%s' "$col_resp" | sed 's/.*"url":"\([^"]*\)".*/\1/')
+    col_url=$(parse_col_url "$resp")
+    if [[ -n "$col_url" ]]; then
       printf 'collection: %s\n' "$col_url"
       clip "$col_url"
       return
     fi
   fi
 
-  local last
-  last=$(tail -1 <<< "$urls")
-  clip "$last"
+  clip "$(tail -1 <<< "$urls")"
 }
 
 cmd_delete() {
@@ -119,7 +126,7 @@ cmd_delete() {
     id=${id%%/*}
     local qs=""
     [[ "$OPT_DEL_FILES" == "1" ]] && qs="?files=true"
-    if curl -sf -X DELETE -H "Authorization: Bearer $FB_KEY" "$FB_SERVER/api/$id$qs" >/dev/null; then
+    if ( call -X DELETE -H "Authorization: Bearer $FB_KEY" "$FB_SERVER/api/$id$qs" ); then
       printf 'deleted: %s\n' "$id"
     else
       printf 'failed:  %s\n' "$id" >&2
@@ -128,19 +135,20 @@ cmd_delete() {
 }
 
 cmd_get() {
-  local pw_args=()
-  [[ -n "$OPT_PASSWORD" ]] && pw_args=(-H "X-Password: $OPT_PASSWORD")
+  local args=()
+  [[ -n "$OPT_PASSWORD" ]] && args+=(-H "X-Password: $OPT_PASSWORD")
+  # the owner's key bypasses passwords and does not trigger burn-after-reading
+  [[ -n "$FB_KEY" ]] && args+=(-H "Authorization: Bearer $FB_KEY")
   for id in "$@"; do
     id=${id#"$FB_SERVER/"}
     id=${id%%/*}
-    curl -sf "${pw_args[@]}" "$FB_SERVER/$id/raw"
+    curl -sf "${args[@]}" "$FB_SERVER/$id/raw" || die "could not fetch $id"
   done
 }
 
 cmd_history() {
   need_key
-  local resp
-  resp=$(curl -sf -H "Authorization: Bearer $FB_KEY" "$FB_SERVER/api/history")
+  call -H "Authorization: Bearer $FB_KEY" "$FB_SERVER/api/history"
 
   if [[ "$OPT_RAW" == "1" ]]; then
     printf '%s' "$resp" | python3 -c "
@@ -149,50 +157,61 @@ d = json.load(sys.stdin)
 for f in d['files']:
     print('\t'.join([f['id'], f['name'], f['mimetype'], str(f['size']), str(f['date'])]))
 for c in d['collections']:
-    print('\t'.join([c['id'], str(len(c['files'])) + ' file(s)', 'collection', '', str(c['date'])]))
+    print('\t'.join([c['id'], str(len(c['files'])) + ' file(s)', 'collection', str(c.get('size', '')), str(c['date'])]))
 "
     return
   fi
 
   printf '%s' "$resp" | python3 -c "
-import json,sys,datetime
+import json,sys,datetime,time
 d = json.load(sys.stdin)
-fmt = '%-8s  %-30s  %-24s  %10s  %s'
-print(fmt % ('ID','NAME','TYPE','SIZE','DATE'))
-print('-' * 100)
+def size(sz):
+    if sz > 1048576: return '%.1f MiB' % (sz/1048576)
+    if sz > 1024:    return '%.1f KiB' % (sz/1024)
+    return '%d B' % sz
+def flags(x):
+    s = ('P' if x.get('protected') else '-') + ('B' if x.get('burn') else '-')
+    e = x.get('expires') or 0
+    if e:
+        left = e - time.time()
+        s += ' %dd' % (left // 86400) if left >= 86400 else ' %dh' % max(0, left // 3600)
+    return s
+fmt = '%-8s  %-30s  %-24s  %10s  %-16s  %s'
+print(fmt % ('ID','NAME','TYPE','SIZE','DATE','FLAGS'))
+print('-' * 106)
 for f in d['files']:
     dt = datetime.datetime.fromtimestamp(f['date']).strftime('%Y-%m-%d %H:%M')
-    sz = f['size']
-    if sz > 1048576: s = '%.1f MiB' % (sz/1048576)
-    elif sz > 1024:  s = '%.1f KiB' % (sz/1024)
-    else:            s = '%d B' % sz
-    print(fmt % (f['id'], f['name'][:30], f['mimetype'][:24], s, dt))
+    print(fmt % (f['id'], f['name'][:30], f['mimetype'].split(';')[0][:24], size(f['size']), dt, flags(f)))
 for c in d['collections']:
     dt = datetime.datetime.fromtimestamp(c['date']).strftime('%Y-%m-%d %H:%M')
-    print(fmt % (c['id'], '%d file(s)' % len(c['files']), 'collection', '', dt))
+    name = (c.get('name') or 'Collection') + ' (%d)' % len(c['files'])
+    print(fmt % (c['id'], name[:30], 'collection', size(c.get('size', 0)), dt, flags(c)))
 print()
 print('total: %d files, %d collections, %.1f MiB' % (
     len(d['files']), len(d['collections']), d['total_size']/1048576))
+print('flags: P = password, B = burn after reading, Nd/Nh = expires in')
 "
 }
 
 cmd_collection() {
   need_key
-  (( $# >= 2 )) || die "usage: fb -c ID ID [ID...]"
+  (( $# >= 1 )) || die "usage: fb -c ID [ID...]"
   local ids="" sep=""
   for id in "$@"; do
     id=${id#"$FB_SERVER/"}
     id=${id%%/*}
-    ids+="${sep}\"$id\""
+    ids+="${sep}$(jstr "$id")"
     sep=","
   done
-  local pw_json=""
-  [[ -n "$OPT_PASSWORD" ]] && pw_json=",\"password\":\"$OPT_PASSWORD\""
-  local resp
-  resp=$(curl -sf -H "Authorization: Bearer $FB_KEY" -H "Content-Type: application/json" \
-    -d "{\"ids\":[$ids]$pw_json}" "$FB_SERVER/api/collection")
+  local body="{\"ids\":[$ids]"
+  [[ -n "$OPT_PASSWORD" ]] && body+=",\"password\":$(jstr "$OPT_PASSWORD")"
+  [[ -n "$OPT_NAME" ]] && body+=",\"name\":$(jstr "$OPT_NAME")"
+  [[ -n "$OPT_EXPIRES" ]] && body+=",\"expires\":$(jstr "$OPT_EXPIRES")"
+  body+="}"
+  call -H "Authorization: Bearer $FB_KEY" -H "Content-Type: application/json" \
+    -d "$body" "$FB_SERVER/api/collection"
   local url
-  url=$(printf '%s' "$resp" | sed 's/.*"url":"\([^"]*\)".*/\1/')
+  url=$(printf '%s' "$resp" | json_field url)
   printf '%s\n' "$url"
   clip "$url"
 }
@@ -207,6 +226,9 @@ usage: fb [options] [file...]
   fb -p PASS file.txt      upload with password protection
   fb a.txt b.png           upload multiple files
   fb -C a.txt b.png        upload and create collection
+  fb -C -n Trip *.jpg      upload into a collection named "Trip"
+  fb -e 1d file.txt        upload, expire after one day
+  fb -b secret.txt         burn after reading (deleted after first view)
   fb                       upload from stdin
   echo hi | fb             pipe to upload
   fb -d ID [ID...]         delete
@@ -215,16 +237,18 @@ usage: fb [options] [file...]
   fb -g -p PASS ID         download password-protected file
   fb -H                    show history (table)
   fb -Hr                   show history (tsv, machine-readable)
-  fb -c ID ID [ID...]      create collection
+  fb -c ID [ID...]         create collection (-n NAME, -p PASS, -e EXPIRY)
 
 examples:
   fb -Hr | grep image/jpeg | cut -f1 | xargs fb -d
   fb -Hr | awk -F'\t' '\$1 ~ /^foo/' | cut -f1 | xargs fb -d
 
 options:
-  -C         create collection when uploading multiple files
+  -b         burn after reading
+  -C         also create a collection of the uploaded files
+  -e EXPIRY  expire after 1h, 1d, 1w, 1m, never, or N seconds
   -F         also delete files inside collections (with -d)
-  -n NAME    filename for stdin upload
+  -n NAME    filename for stdin upload, or collection name (-C/-c)
   -p PASS    password protect upload, or unlock on download
   -r         raw/tsv output (for -H)
   -s SERVER  server URL (default: \$FB_SERVER)
@@ -243,13 +267,17 @@ OPT_COLLECT=""
 OPT_RAW=""
 OPT_DEL_FILES=""
 OPT_PASSWORD=""
+OPT_EXPIRES=""
+OPT_BURN=""
 MODE="upload"
 
-while getopts "n:s:p:dDgGHhcCFrv" opt; do
+while getopts "n:s:p:e:bdDgGHhcCFrv" opt; do
   case "$opt" in
     n) OPT_NAME="$OPTARG" ;;
     s) FB_SERVER="$OPTARG" ;;
     p) OPT_PASSWORD="$OPTARG" ;;
+    e) OPT_EXPIRES="$OPTARG" ;;
+    b) OPT_BURN="1" ;;
     d|D) MODE="delete" ;;
     g|G) MODE="get" ;;
     H) MODE="history" ;;
@@ -257,7 +285,7 @@ while getopts "n:s:p:dDgGHhcCFrv" opt; do
     C) OPT_COLLECT="1" ;;
     F) OPT_DEL_FILES="1" ;;
     r) OPT_RAW="1" ;;
-    v) echo "fb 1.0.0"; exit 0 ;;
+    v) echo "fb 1.1.0"; exit 0 ;;
     *) usage ;;
   esac
 done

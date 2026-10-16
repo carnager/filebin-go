@@ -2,12 +2,13 @@
 
 <div class="narrow">
   <h2>Login</h2>
-  {{if .Flash}}<div class="alert {{.FlashType}}">{{.Flash}}</div>{{end}}
+  {{if .Flash}}<div class="alert {{.FlashType}}" role="alert">{{.Flash}}</div>{{end}}
   <form method="post" action="/login">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <input type="hidden" name="next" value="{{.Next}}">
     <label for="apikey">API Key</label>
-    <input type="password" name="apikey" id="apikey" class="input" autofocus required>
+    <input type="password" name="apikey" id="apikey" class="input" autocomplete="current-password" autofocus required>
+    <label class="check"><input type="checkbox" name="remember" value="1"> Remember me for 30 days</label>
     <button type="submit" class="btn primary">Login</button>
   </form>
 </div>

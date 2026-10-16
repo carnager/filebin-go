@@ -1,27 +1,32 @@
 {{template "header" .}}
 
 <div class="file-bar">
-  <strong>{{.File.Name}}</strong>
-  <span class="meta">{{.File.Size | formatBytes}} · {{.LexerName}} · <a href="{{.RawURL}}">raw</a> · <a href="/{{.File.ID}}/info">info</a></span>
+  <div class="file-title"><strong data-title>{{.File.Name}}</strong>{{template "badges" (dict "Protected" .File.IsProtected "Burn" .File.Burn "Expires" .Expires)}}</div>
+  <span class="meta">{{.File.Size | formatBytes}} · {{typeLabel .File.Mimetype}} · {{.File.Date | formatDate}}</span>
+  {{template "sharebar" .}}
 </div>
+{{if .Burned}}<div class="alert warn" role="status">Burn after reading: this paste has been deleted from the server. Copy it now if you need it.</div>{{end}}
 <style>{{.ChromaCSS}}</style>
-<div class="code-wrap" id="codeblock">
-<button class="code-copy" id="codecopy" title="Copy">&#128203;</button>
-{{.Highlight}}
+
+<div class="code-tools" data-id="{{.File.ID}}">
+  {{if .Markdown}}
+  <div class="seg" role="group" aria-label="Markdown view">
+    <button type="button" class="btn sm active" data-md="rendered" aria-pressed="true">Rendered</button>
+    <button type="button" class="btn sm" data-md="source" aria-pressed="false">Source</button>
+  </div>
+  {{end}}
+  <label class="sr-only" for="lang-select">Language</label>
+  <select id="lang-select" class="input sm" {{if .Burned}}disabled{{end}}>
+    <option value="">Auto ({{.LexerName}})</option>
+    {{$cur := .LexerName}}{{range .Lexers}}<option value="{{.Alias}}"{{if eq .Name $cur}} selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  <button type="button" class="btn sm" id="wrap-toggle" aria-pressed="false">{{template "icon" "wrap"}}<span>Wrap</span></button>
 </div>
 
-<script>
-document.getElementById('codecopy').addEventListener('click',function(){
-  var code=document.getElementById('codeblock');
-  var lines=code.querySelectorAll('.line');
-  var text;
-  if(lines.length){text=Array.from(lines).map(function(l){return l.textContent}).join('\n');}
-  else{var pre=code.querySelector('pre');text=pre?pre.textContent:code.textContent;}
-  navigator.clipboard.writeText(text).then(function(){
-    var btn=document.getElementById('codecopy');
-    btn.textContent='\u2713';setTimeout(function(){btn.innerHTML='&#128203;';},1500);
-  });
-});
-</script>
+{{if .Markdown}}<article class="markdown card" id="md-rendered">{{.Markdown}}</article>{{end}}
+<div class="code-wrap" id="codeblock"{{if .Markdown}} hidden{{end}}>
+<button type="button" class="code-copy" id="codecopy" title="Copy code" aria-label="Copy code">{{template "icon" "copy"}}</button>
+{{.Highlight}}
+</div>
 
 {{template "footer" .}}

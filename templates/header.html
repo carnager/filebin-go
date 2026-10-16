@@ -5,15 +5,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{if .Title}}{{.Title}} — {{end}}filebin</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  {{with .OG}}
+  <meta property="og:site_name" content="filebin">
+  <meta property="og:title" content="{{.Title}}">
+  {{if .Description}}<meta property="og:description" content="{{.Description}}"><meta name="description" content="{{.Description}}">{{end}}
+  {{if .URL}}<meta property="og:url" content="{{.URL}}">{{end}}
+  {{if .Image}}<meta property="og:image" content="{{.Image}}"><meta name="twitter:image" content="{{.Image}}">{{end}}
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="{{if .Card}}{{.Card}}{{else}}summary{{end}}">
+  <meta name="twitter:title" content="{{.Title}}">
+  {{end}}
+  {{if .LoggedIn}}<meta name="csrf-token" content="{{.CSRFToken}}">{{end}}
   <link rel="stylesheet" href="/static/style.css">
   <script>
-    (function(){var t=localStorage.getItem('theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
+    (function(){try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();
   </script>
 </head>
 <body>
 <nav>
   <div class="nav-inner">
-    <a href="/" class="brand">filebin</a>
+    <a href="/" class="brand"><img src="/static/favicon.svg" alt="" width="20" height="20">filebin</a>
     <div class="nav-links">
       {{if .LoggedIn}}
         <a href="/history">history</a>
@@ -22,7 +34,9 @@
       {{else}}
         <a href="/login">login</a>
       {{end}}
-      <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
+      <button type="button" class="theme-toggle" id="theme-toggle" title="Theme: system" aria-label="Theme: system">
+        <span class="t-system">{{template "icon" "system"}}</span><span class="t-light">{{template "icon" "sun"}}</span><span class="t-dark">{{template "icon" "moon"}}</span>
+      </button>
     </div>
   </div>
 </nav>

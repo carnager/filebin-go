@@ -3,12 +3,14 @@
 {{if not .LoggedIn}}
   <p class="notice"><a href="/login">Login</a> to upload.</p>
 {{else}}
-<form method="post" action="/upload" enctype="multipart/form-data" class="upload-form">
+<form method="post" action="/upload" enctype="multipart/form-data" class="upload-form" id="upload-form" data-max-size="{{.MaxUpload}}" data-max-files="{{.MaxFiles}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <section class="card">
     <h3>Paste text</h3>
-    <input type="text" name="name" placeholder="filename (optional)" class="input">
-    <textarea name="content" rows="10" placeholder="paste here..." class="mono"></textarea>
+    <label class="sr-only" for="paste-name">File name</label>
+    <input type="text" name="name" id="paste-name" placeholder="filename (optional, e.g. notes.md)" class="input">
+    <label class="sr-only" for="paste-content">Text</label>
+    <textarea name="content" id="paste-content" rows="10" placeholder="paste here..." class="mono"></textarea>
   </section>
 
   <div class="divider"><span>and / or</span></div>
@@ -16,19 +18,37 @@
   <section class="card">
     <h3>Upload files</h3>
     <input type="file" name="file" multiple id="file-input" hidden>
-    <label for="file-input" class="drop-zone" id="drop-zone">Drop files here or click to browse</label>
+    <label for="file-input" class="drop-zone" id="drop-zone" tabindex="0" role="button">{{template "icon" "upload"}} Drop files anywhere, paste with Ctrl+V, or click to browse</label>
     <div id="file-list" class="file-list"></div>
-    <button type="button" id="add-more-btn" class="btn sm" style="display:none;margin-top:.5rem">+ Add more files</button>
+    <p class="meta hint" id="upload-hint">Up to {{.MaxFiles}} files, {{.MaxUpload | formatBytes}} in total.</p>
   </section>
 
   <section class="card">
     <h3>Options</h3>
-    <input type="password" name="password" placeholder="Password (optional)" class="input" autocomplete="off">
+    <div class="opt-grid">
+      <div>
+        <label for="opt-pw">Password</label>
+        <input type="password" name="password" id="opt-pw" placeholder="optional" class="input" autocomplete="new-password">
+      </div>
+      <div>
+        <label for="opt-exp">Expires</label>
+        <select name="expires" id="opt-exp" class="input">
+          {{range .ExpiryOptions}}<option value="{{.}}"{{if eq . "never"}} selected{{end}}>{{expiryLabel .}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" name="burn" value="1" id="opt-burn"> Burn after reading <span class="meta">— deleted after the first view</span></label>
+    <div id="col-name-row" hidden>
+      <label for="opt-col">Collection name</label>
+      <input type="text" name="collection_name" id="opt-col" class="input" placeholder="optional">
+    </div>
   </section>
 
-  <button type="submit" class="btn primary">Upload</button>
+  <div class="alert error" id="upload-error" role="alert" hidden></div>
+  <div class="progress" id="progress" hidden><div class="progress-bar" id="progress-bar"></div><span class="progress-label" id="progress-label"></span></div>
+  <button type="submit" class="btn primary" id="upload-btn">{{template "icon" "upload"}}<span>Upload</span></button>
 </form>
+<div class="drop-overlay" id="drop-overlay" hidden><div>{{template "icon" "upload"}}Drop files to add them</div></div>
 {{end}}
 
-<script src="/static/app.js"></script>
 {{template "footer" .}}
