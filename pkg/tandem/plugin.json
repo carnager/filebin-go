@@ -6,11 +6,6 @@
     {
       "id": "upload",
       "title": "Upload to filebin",
-      "run": ["./upload", "keep", "%s"]
-    },
-    {
-      "id": "upload-for",
-      "title": "Upload to filebin for",
       "run": ["./upload", "%c", "%s"],
       "choices": ["./upload", "--choices"]
     }

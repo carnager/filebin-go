@@ -126,9 +126,9 @@ This installs:
 - `filebin` — server binary, systemd service, sysusers/tmpfiles
 - `fb` — CLI client, `fb-upload` helper, Thunar sendto integration and a Tandem plugin
 
-The Tandem plugin adds **Upload to filebin** and **Upload to filebin for** (1 hour … 1 month,
-or burn after reading) to the context menu. Switch it on in Settings › Plugins. Several files
-become one collection; the link is copied and shown in the status line.
+The Tandem plugin adds **Upload to filebin** to the context menu and the preview panel, with a
+submenu: no expiry, 1 hour … 1 month, or burn after reading. Switch it on in Settings › Plugins.
+Several files become one collection; the link is copied and shown in the status line.
 
 ```sh
 # Add your API key

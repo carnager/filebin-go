@@ -2,16 +2,17 @@
 # Tandem plugin: uploads the selected files with fb and copies the link.
 # Several files become one collection, like fb-upload does.
 #
-#   upload keep|1h|1d|1w|1m|burn FILE...
-#   upload --choices     the entries of "Upload to filebin for"
+#   upload CHOICE FILE...   CHOICE is one of the entries --choices prints
+#   upload --choices        the entries of the "Upload to filebin" submenu
 set -uo pipefail
 
 if [[ ${1-} == --choices ]]; then
-    printf '%s\t%s\n' "1 hour" 1h "1 day" 1d "1 week" 1w "1 month" 1m "Burn after reading" burn
+    # Labels only: Tandem shows the chosen one while uploading.
+    printf '%s\n' "No expiry" "1 hour" "1 day" "1 week" "1 month" "Burn after reading"
     exit 0
 fi
 
-mode=${1-keep}
+choice=${1-}
 shift
 (( $# )) || { echo "Nothing selected" >&2; exit 1; }
 for f in "$@"; do
@@ -19,10 +20,14 @@ for f in "$@"; do
 done
 
 args=()
-case $mode in
-keep) ;;
-burn) args+=(-b) ;;
-*) args+=(-e "$mode") ;;
+case $choice in
+"No expiry") ;;
+"1 hour") args+=(-e 1h) ;;
+"1 day") args+=(-e 1d) ;;
+"1 week") args+=(-e 1w) ;;
+"1 month") args+=(-e 1m) ;;
+"Burn after reading") args+=(-b) ;;
+*) echo "Unknown choice: $choice" >&2; exit 1 ;;
 esac
 (( $# > 1 )) && args+=(-C)
 
