@@ -1,0 +1,18 @@
+{
+  "tandem": 1,
+  "name": "filebin",
+  "description": "Upload files to your filebin server and copy the link",
+  "actions": [
+    {
+      "id": "upload",
+      "title": "Upload to filebin",
+      "run": ["./upload", "keep", "%s"]
+    },
+    {
+      "id": "upload-for",
+      "title": "Upload to filebin for",
+      "run": ["./upload", "%c", "%s"],
+      "choices": ["./upload", "--choices"]
+    }
+  ]
+}

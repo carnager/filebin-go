@@ -1,7 +1,7 @@
 pkgbase=filebin
 pkgname=('filebin' 'fb')
 pkgver=1.1.0
-pkgrel=2
+pkgrel=3
 arch=('x86_64' 'aarch64')
 url='https://github.com/carnager/filebin-go'
 license=('MIT')
@@ -45,4 +45,6 @@ package_fb() {
     install -Dm755 pkg/fb-upload "$pkgdir/usr/bin/fb-upload"
     install -Dm644 pkg/fb-upload.desktop "$pkgdir/usr/share/Thunar/sendto/fb-upload.desktop"
     install -Dm644 pkg/fb-upload.desktop "$pkgdir/usr/share/applications/fb-upload.desktop"
+    install -Dm644 pkg/tandem/plugin.json "$pkgdir/usr/share/tandem-fm/plugins/filebin/plugin.json"
+    install -Dm755 pkg/tandem/upload "$pkgdir/usr/share/tandem-fm/plugins/filebin/upload"
 }

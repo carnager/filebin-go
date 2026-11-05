@@ -22,7 +22,7 @@ A simple, self-hosted file and paste server with syntax highlighting, media supp
 - **Auto-cleanup** of expired items, plus optional global retention
 - **API** with Bearer token auth for programmatic access
 - **CLI client** (`fb`) with upload, download, delete, history, expiry, burn and collection support
-- **Arch Linux packaging** with systemd service, sysusers, tmpfiles, and Thunar integration
+- **Arch Linux packaging** with systemd service, sysusers, tmpfiles, and Thunar and [Tandem](https://github.com/carnager/tandem-fm) integration
 
 ## Quick Start
 
@@ -124,7 +124,11 @@ cd pkg && makepkg -si
 
 This installs:
 - `filebin` — server binary, systemd service, sysusers/tmpfiles
-- `fb` — CLI client, `fb-upload` helper, Thunar sendto integration
+- `fb` — CLI client, `fb-upload` helper, Thunar sendto integration and a Tandem plugin
+
+The Tandem plugin adds **Upload to filebin** and **Upload to filebin for** (1 hour … 1 month,
+or burn after reading) to the context menu. Switch it on in Settings › Plugins. Several files
+become one collection; the link is copied and shown in the status line.
 
 ```sh
 # Add your API key

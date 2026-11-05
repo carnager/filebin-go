@@ -1,0 +1,59 @@
+#!/bin/bash
+# Tandem plugin: uploads the selected files with fb and copies the link.
+# Several files become one collection, like fb-upload does.
+#
+#   upload keep|1h|1d|1w|1m|burn FILE...
+#   upload --choices     the entries of "Upload to filebin for"
+set -uo pipefail
+
+if [[ ${1-} == --choices ]]; then
+    printf '%s\t%s\n' "1 hour" 1h "1 day" 1d "1 week" 1w "1 month" 1m "Burn after reading" burn
+    exit 0
+fi
+
+mode=${1-keep}
+shift
+(( $# )) || { echo "Nothing selected" >&2; exit 1; }
+for f in "$@"; do
+    [[ -d $f ]] && { echo "Folders can't be uploaded: ${f##*/}" >&2; exit 1; }
+done
+
+args=()
+case $mode in
+keep) ;;
+burn) args+=(-b) ;;
+*) args+=(-e "$mode") ;;
+esac
+(( $# > 1 )) && args+=(-C)
+
+# fb would copy too, but with its clipboard tool on our output; copy here instead.
+err=$(mktemp) && trap 'rm -f "$err"' EXIT
+if ! out=$(FB_CLIP=none fb "${args[@]}" "$@" 2>"$err"); then
+    msg=$(sed -n '1s/^error: //p' "$err")
+    echo "Upload failed: ${msg:-fb exited with an error}" >&2
+    exit 1
+fi
+if (( $# > 1 )); then
+    url=$(sed -n 's/^collection: //p' <<<"$out")
+else
+    url=$(tail -n1 <<<"$out")
+fi
+[[ -n $url ]] || { echo "Upload failed: fb printed no link" >&2; exit 1; }
+
+copied=false
+if [[ ${FB_CLIP:-auto} != none ]]; then
+    if [[ -n ${WAYLAND_DISPLAY-} ]] && command -v wl-copy >/dev/null; then
+        printf '%s' "$url" | wl-copy >/dev/null 2>&1 && copied=true
+    elif [[ -n ${DISPLAY-} ]] && command -v xclip >/dev/null; then
+        printf '%s' "$url" | xclip -selection clipboard >/dev/null 2>&1 && copied=true
+    fi
+fi
+
+what=${1##*/}
+(( $# > 1 )) && what="$# files"
+# A plain line: Tandem shows it in the status line.
+if $copied; then
+    printf 'Link to %s copied: %s\n' "$what" "$url"
+else
+    printf 'Uploaded %s: %s\n' "$what" "$url"
+fi
