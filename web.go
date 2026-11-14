@@ -150,16 +150,25 @@ func (s *Server) requireLogin(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// safeNext only allows local paths. Browsers drop tabs/newlines and treat "\" like "/",
+// so "/\t/evil.com" or "/\evil.com" would become "//evil.com"; reject those outright.
 func safeNext(next string) string {
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") ||
-		strings.ContainsAny(next, "\r\n") {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") {
+		return "/"
+	}
+	for _, c := range next {
+		if c < 0x20 || c == 0x7f {
+			return "/"
+		}
+	}
+	if u, err := url.Parse(next); err != nil || u.Scheme != "" || u.Host != "" {
 		return "/"
 	}
 	return next
 }
 
 func isSecure(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return requestScheme(r) == "https"
 }
 
 func (s *Server) setCookie(w http.ResponseWriter, r *http.Request, c *http.Cookie) {
@@ -322,7 +331,7 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "image/png")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
 		w.Write(png)
 		return
 	}
@@ -332,6 +341,9 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 			if !s.handlePasswordCheck(w, r, id, "Collection "+col.Title(), col.CheckPassword) {
 				return
 			}
+		}
+		if !viewMethodOK(w, r) {
+			return
 		}
 		s.viewCollection(w, r, col, suffix, owner)
 		return
@@ -346,6 +358,9 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 		if !s.handlePasswordCheck(w, r, id, meta.Name, meta.CheckPassword) {
 			return
 		}
+	}
+	if !viewMethodOK(w, r) {
+		return
 	}
 	burn := meta.Burn && !owner && r.Method == http.MethodGet
 	if burn && suffix != "info" && isPreviewBot(r) {
@@ -366,6 +381,17 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.renderPaste(w, r, meta, suffix, burn)
 	}
+}
+
+// viewMethodOK rejects POSTs that get past the password gate: POST is only for
+// submitting the password form, and serving content to it would skip burn-after-reading.
+func viewMethodOK(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	w.Header().Set("Allow", "GET, HEAD")
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
 }
 
 func fileShare(m *FileMeta) *Share {
@@ -553,13 +579,22 @@ func (s *Server) viewCollection(w http.ResponseWriter, r *http.Request, col *Col
 	files := s.resolveFiles(col.Files)
 	burn := col.Burn && !owner && r.Method == http.MethodGet
 	share := &Share{ID: col.ID, Name: col.Name, Download: "/" + col.ID + "/tar", Collection: true}
+	// Getting past a collection's password unlocks its files; in an unprotected
+	// collection every file keeps its own password.
+	canGet := func(f *FileMeta) bool { return owner || col.IsProtected() || s.canSee(r, f, owner) }
 	switch suffix {
 	case "tar":
 		if burn && s.store.DeleteCollection(col.ID) != nil {
 			http.NotFound(w, r)
 			return
 		}
-		s.serveCollectionTar(w, col, files)
+		var allowed []*FileMeta
+		for _, f := range files {
+			if canGet(f) {
+				allowed = append(allowed, f)
+			}
+		}
+		s.serveCollectionTar(w, col, allowed, !owner && r.Method == http.MethodGet)
 		return
 	case "info":
 		s.render(w, r, "info", PageData{Title: col.Title() + " — Info", Collection: col, ColFiles: files, Share: share,
@@ -571,7 +606,15 @@ func (s *Server) viewCollection(w http.ResponseWriter, r *http.Request, col *Col
 		return
 	}
 	if !wantsHTML(r) && len(files) > 0 {
-		s.serveRaw(w, r, files[0], files[0].Burn && !owner)
+		if !canGet(files[0]) {
+			apiErr(w, "password required", http.StatusForbidden)
+			return
+		}
+		if burn && s.store.DeleteCollection(col.ID) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.serveRaw(w, r, files[0], files[0].Burn && !owner && r.Method == http.MethodGet)
 		return
 	}
 	if burn && isPreviewBot(r) {
@@ -589,7 +632,7 @@ func (s *Server) viewCollection(w http.ResponseWriter, r *http.Request, col *Col
 			Description: fmt.Sprintf("%d file(s) · %s", len(files), formatBytes(sumSize(files)))}
 	}
 	for i, f := range files {
-		items[i] = FileItem{f, !f.Burn && s.canSee(r, f, owner) || owner}
+		items[i] = FileItem{f, owner || !f.Burn && canGet(f)}
 		if og.URL != "" && og.Image == "" && canThumb(f.Mimetype) && !f.Burn && !f.IsProtected() {
 			og.Image, og.Card = baseURL(r)+"/"+f.ID+"/thumb", "summary_large_image"
 		}
@@ -617,22 +660,62 @@ func (s *Server) resolveFiles(ids []string) []*FileMeta {
 	return out
 }
 
-func (s *Server) serveCollectionTar(w http.ResponseWriter, col *Collection, files []*FileMeta) {
+// serveCollectionTar streams files as a tar. With consume set, burn-after-reading
+// files are deleted as they are added (and skipped if someone else got them first).
+func (s *Server) serveCollectionTar(w http.ResponseWriter, col *Collection, files []*FileMeta, consume bool) {
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.Header().Set("Content-Disposition", contentDisposition("attachment", col.ID+".tar"))
+	w.Header().Set("Cache-Control", "private, no-store")
 	tw := tar.NewWriter(w)
 	defer tw.Close()
+	used := map[string]bool{}
 	for _, meta := range files {
 		f, err := os.Open(s.store.FilePath(meta.Hash))
 		if err != nil {
 			continue
 		}
+		// Open before deleting: the open handle keeps the blob readable.
+		if meta.Burn && consume && s.store.DeleteFile(meta.ID) != nil {
+			f.Close()
+			continue
+		}
 		if info, err := f.Stat(); err == nil {
-			tw.WriteHeader(&tar.Header{Name: meta.Name, Size: info.Size(), Mode: 0644, ModTime: time.Unix(meta.Date, 0)})
+			name := tarName(meta, used)
+			tw.WriteHeader(&tar.Header{Name: name, Size: info.Size(), Mode: 0644, ModTime: time.Unix(meta.Date, 0)})
 			io.Copy(tw, f)
 		}
 		f.Close()
 	}
+}
+
+// tarName keeps entries flat and unique so extracting can't write outside the target directory.
+func tarName(m *FileMeta, used map[string]bool) string {
+	name := cleanName(m.Name)
+	if name == "" {
+		name = m.ID
+	}
+	if used[name] {
+		name = m.ID + "-" + name
+	}
+	used[name] = true
+	return name
+}
+
+// cleanName strips anything that would make a file name act as a path.
+func cleanName(name string) string {
+	name = strings.Map(func(c rune) rune {
+		switch {
+		case c == '/' || c == '\\':
+			return '_'
+		case c < 0x20 || c == 0x7f:
+			return -1
+		}
+		return c
+	}, strings.TrimSpace(name))
+	if name == "." || name == ".." {
+		return ""
+	}
+	return name
 }
 
 // --- Web uploads & actions ---
@@ -683,7 +766,7 @@ func (s *Server) handleWebUpload(w http.ResponseWriter, r *http.Request) {
 
 	var ids []string
 	if content != "" {
-		name := strings.TrimSpace(r.FormValue("name"))
+		name := cleanName(r.FormValue("name"))
 		if name == "" {
 			name = "paste.txt"
 		}

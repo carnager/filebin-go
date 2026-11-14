@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -15,19 +16,58 @@ import (
 
 var expiryOptions = []string{"1h", "1d", "1w", "1m", "never"}
 
-func baseURL(r *http.Request) string {
-	scheme := "http"
+// fromProxy reports whether X-Forwarded-* headers can be trusted: only when the
+// peer is on loopback or a private network, i.e. a reverse proxy, not a random client.
+func fromProxy(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+}
+
+// forwarded returns the first value of a trusted X-Forwarded-* header.
+func forwarded(r *http.Request, name string) string {
+	if !fromProxy(r) {
+		return ""
+	}
+	v, _, _ := strings.Cut(r.Header.Get(name), ",")
+	return strings.TrimSpace(v)
+}
+
+func requestScheme(r *http.Request) string {
+	if p := strings.ToLower(forwarded(r, "X-Forwarded-Proto")); p == "http" || p == "https" {
+		return p
+	}
 	if r.TLS != nil {
-		scheme = "https"
+		return "https"
 	}
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
+	return "http"
+}
+
+// validHost accepts host[:port] made of characters that can't break out of a URL.
+func validHost(h string) bool {
+	if h == "" || len(h) > 255 {
+		return false
 	}
+	for _, c := range h {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune(".-:[]_", c)) {
+			return false
+		}
+	}
+	return true
+}
+
+func baseURL(r *http.Request) string {
 	host := r.Host
-	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+	if fwd := forwarded(r, "X-Forwarded-Host"); validHost(fwd) {
 		host = fwd
 	}
-	return scheme + "://" + host
+	if !validHost(host) {
+		host = "localhost"
+	}
+	return requestScheme(r) + "://" + host
 }
 
 // parseExpiry converts "1h", "1d", "1w", "1m", "never"/"" or integer seconds to a unix timestamp (0 = never).

@@ -540,3 +540,177 @@ func TestRawSandboxCSP(t *testing.T) {
 		}
 	}
 }
+
+func TestBurnNotBypassedByPOST(t *testing.T) {
+	s, ts := newTestServer(t)
+	out := mustUpload(t, ts, part{"file", "s.txt", "secret"}, part{"burn", "", "1"})
+	id := out.Files[0].ID
+	for _, path := range []string{"/" + id, "/" + id + "/raw", "/" + id + "/go"} {
+		req, _ := http.NewRequest("POST", ts.URL+path, nil)
+		if resp, b := do(t, req); resp.StatusCode != http.StatusMethodNotAllowed || strings.Contains(string(b), "secret") {
+			t.Fatalf("POST %s: %d %q", path, resp.StatusCode, b)
+		}
+	}
+	if !s.store.FileExists(id) {
+		t.Fatal("rejected POST should not consume the file")
+	}
+	if resp, b := get(t, ts, "/"+id+"/raw"); resp.StatusCode != 200 || string(b) != "secret" {
+		t.Fatalf("first GET: %d %q", resp.StatusCode, b)
+	}
+	if resp, _ := get(t, ts, "/"+id+"/raw"); resp.StatusCode != 404 {
+		t.Fatalf("second GET should 404, got %d", resp.StatusCode)
+	}
+
+	// same for collections
+	col := mustUpload(t, ts, part{"file", "a.txt", "a"}, part{"file", "b.txt", "b"},
+		part{"collection", "", "1"}, part{"burn", "", "1"}).Collection
+	req, _ := http.NewRequest("POST", ts.URL+"/"+col.ID+"/tar", nil)
+	if resp, _ := do(t, req); resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST tar: %d", resp.StatusCode)
+	}
+	if !s.store.CollectionExists(col.ID) {
+		t.Fatal("rejected POST should not consume the collection")
+	}
+}
+
+func TestPasswordFormStillWorks(t *testing.T) {
+	_, ts := newTestServer(t)
+	id := mustUpload(t, ts, part{"file", "p.txt", "hidden"}, part{"password", "", "pw"}).Files[0].ID
+	resp, _ := get(t, ts, "/"+id, "Accept", "text/html")
+	csrf := ""
+	for _, c := range resp.Cookies() {
+		if c.Name == "csrf" {
+			csrf = c.Value
+		}
+	}
+	form := url.Values{"password": {"pw"}, "csrf_token": {csrf}}
+	req, _ := http.NewRequest("POST", ts.URL+"/"+id, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "text/html")
+	req.AddCookie(&http.Cookie{Name: "csrf", Value: csrf})
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	r, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("password POST: %d", r.StatusCode)
+	}
+}
+
+func TestCollectionRespectsFilePasswords(t *testing.T) {
+	_, ts := newTestServer(t)
+	priv := mustUpload(t, ts, part{"file", "priv.txt", "PRIVATE"}, part{"password", "", "pw"}).Files[0].ID
+	pub := mustUpload(t, ts, part{"file", "pub.txt", "public"}).Files[0].ID
+
+	_, b := apiJSON(t, ts, "POST", "/api/collection", map[string]any{"ids": []string{priv, pub}})
+	var col CollectionView
+	json.Unmarshal(b, &col)
+
+	if resp, b := get(t, ts, "/"+col.ID); resp.StatusCode != 403 || strings.Contains(string(b), "PRIVATE") {
+		t.Fatalf("collection raw: %d %q", resp.StatusCode, b)
+	}
+	resp, b := get(t, ts, "/"+col.ID+"/tar")
+	if resp.StatusCode != 200 || strings.Contains(string(b), "PRIVATE") || !strings.Contains(string(b), "public") {
+		t.Fatalf("tar: %d leaked=%v", resp.StatusCode, strings.Contains(string(b), "PRIVATE"))
+	}
+	if _, b := get(t, ts, "/"+col.ID+"/tar", "Authorization", "Bearer "+testKey); !strings.Contains(string(b), "PRIVATE") {
+		t.Fatal("owner tar should include protected files")
+	}
+
+	// a protected collection's password unlocks its files
+	pc := mustUpload(t, ts, part{"file", "x.txt", "X"}, part{"file", "y.txt", "Y"},
+		part{"collection", "", "1"}, part{"password", "", "cpw"}).Collection
+	if resp, _ := get(t, ts, "/"+pc.ID); resp.StatusCode != 403 {
+		t.Fatalf("locked collection: %d", resp.StatusCode)
+	}
+	if resp, b := get(t, ts, "/"+pc.ID, "X-Password", "cpw"); resp.StatusCode != 200 || string(b) != "X" {
+		t.Fatalf("unlocked collection: %d %q", resp.StatusCode, b)
+	}
+	if _, b := get(t, ts, "/"+pc.ID+"/tar", "X-Password", "cpw"); !strings.Contains(string(b), "Y") {
+		t.Fatal("unlocked tar should include files")
+	}
+}
+
+func TestTarConsumesBurnFiles(t *testing.T) {
+	s, ts := newTestServer(t)
+	b := mustUpload(t, ts, part{"file", "b.txt", "BURN"}, part{"burn", "", "1"}).Files[0].ID
+	k := mustUpload(t, ts, part{"file", "k.txt", "KEEP"}).Files[0].ID
+	_, body := apiJSON(t, ts, "POST", "/api/collection", map[string]any{"ids": []string{b, k}})
+	var col CollectionView
+	json.Unmarshal(body, &col)
+
+	if _, out := get(t, ts, "/"+col.ID+"/tar"); !strings.Contains(string(out), "BURN") {
+		t.Fatal("first tar should include the burn file")
+	}
+	if s.store.FileExists(b) {
+		t.Fatal("burn file should be consumed by the tar download")
+	}
+	if _, out := get(t, ts, "/"+col.ID+"/tar"); strings.Contains(string(out), "BURN") || !strings.Contains(string(out), "KEEP") {
+		t.Fatal("second tar should only contain the kept file")
+	}
+}
+
+func TestSafeNext(t *testing.T) {
+	for in, want := range map[string]string{
+		"/history":         "/history",
+		"/abc?x=1#y":       "/abc?x=1#y",
+		"":                 "/",
+		"history":          "/",
+		"//evil.com":       "/",
+		"/\\evil.com":      "/",
+		"/\t/evil.com":     "/",
+		"/\n/evil.com":     "/",
+		"/\r/evil.com":     "/",
+		"https://evil.com": "/",
+		"/a\\b":            "/",
+		"/\x00":            "/",
+	} {
+		if got := safeNext(in); got != want {
+			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTarNames(t *testing.T) {
+	used := map[string]bool{}
+	for _, c := range []struct{ name, want string }{
+		{"../../.bashrc", ".._.._.bashrc"},
+		{"/etc/passwd", "_etc_passwd"},
+		{"..", "id1"},
+		{"a\\b", "a_b"},
+		{"ok.txt", "ok.txt"},
+		{"ok.txt", "id1-ok.txt"},
+	} {
+		if got := tarName(&FileMeta{ID: "id1", Name: c.name}, used); got != c.want {
+			t.Errorf("tarName(%q) = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestForwardedHeadersOnlyFromProxy(t *testing.T) {
+	mk := func(remote string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Host = "files.example.org"
+		r.RemoteAddr = remote
+		r.Header.Set("X-Forwarded-Host", "evil.com")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		return r
+	}
+	if got := baseURL(mk("203.0.113.5:1234")); got != "http://files.example.org" {
+		t.Errorf("public client: %s", got)
+	}
+	if isSecure(mk("203.0.113.5:1234")) {
+		t.Error("public client must not be able to claim https")
+	}
+	if got := baseURL(mk("127.0.0.1:1234")); got != "https://evil.com" {
+		t.Errorf("loopback proxy: %s", got)
+	}
+	r := mk("10.0.0.2:1234")
+	r.Header.Set("X-Forwarded-Host", "bad/host\"<x>")
+	r.Header.Set("X-Forwarded-Proto", "javascript")
+	if got := baseURL(r); got != "http://files.example.org" {
+		t.Errorf("invalid forwarded values: %s", got)
+	}
+}
